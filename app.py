@@ -118,6 +118,9 @@ def main():
             with gr.Column():
                 answer_output = gr.Textbox(label="🐥 Answer", interactive=False)
                 verification_output = gr.Textbox(label="✅ Verification Report")
+                citations_output = gr.Textbox(
+                    label="📚 Sources & Citations", lines=8, interactive=False
+                )
 
         # 4) Helper function to load example into the UI
         def load_example(example_key: str):
@@ -178,16 +181,21 @@ def main():
                     retriever=state["retriever"]
                 )
                 
-                return result["draft_answer"], result["verification_report"], state
+                return (
+                    result["draft_answer"],
+                    result["verification_report"],
+                    result["citation_report"],
+                    state,
+                )
                     
             except Exception as e:
                 logger.error(f"Processing error: {str(e)}")
-                return f"❌ Error: {str(e)}", "", state
+                return f"❌ Error: {str(e)}", "", "", state
 
         submit_btn.click(
             fn=process_question,
             inputs=[question, files, session_state],
-            outputs=[answer_output, verification_output, session_state]
+            outputs=[answer_output, verification_output, citations_output, session_state]
         )
 
     demo.launch(

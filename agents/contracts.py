@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 class StructuredOutputError(ValueError):
@@ -48,6 +48,28 @@ class RelevanceResult(StrictAgentResult):
 
 class ResearchResult(StrictAgentResult):
     draft_answer: str
+    claim_sources: list["ClaimSource"] = Field(default_factory=list)
+    citations: list["SourceCitation"] = Field(default_factory=list)
+
+
+class ClaimSource(StrictAgentResult):
+    """A model-proposed mapping from one answer claim to retrieved chunk IDs."""
+
+    claim: str
+    chunk_ids: list[str]
+
+
+class SourceCitation(StrictAgentResult):
+    """A resolved, user-inspectable reference to local retrieved evidence."""
+
+    claim: str
+    chunk_id: str | None
+    document_id: str | None
+    source_name: str | None
+    section: str | None
+    page: int | None
+    available: bool
+    message: str | None = None
 
 
 class VerificationResult(StrictAgentResult):

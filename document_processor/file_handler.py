@@ -43,6 +43,8 @@ class DocumentProcessor:
                     logger.info(f"Processing and caching: {file.name}")
                     chunks = self._process_file(file)
                     self._save_to_cache(chunks, cache_path)
+
+                self._attach_provenance(chunks, file_hash, Path(file.name).name)
                 
                 # Deduplicate chunks across files
                 for chunk in chunks:
@@ -68,6 +70,24 @@ class DocumentProcessor:
         markdown = converter.convert(file.name).document.export_to_markdown()
         splitter = MarkdownHeaderTextSplitter(self.headers)
         return splitter.split_text(markdown)
+
+    @staticmethod
+    def _attach_provenance(chunks: List, document_id: str, source_name: str) -> None:
+        """Attach stable local provenance after fresh or cached chunk loading."""
+        for index, chunk in enumerate(chunks):
+            metadata = dict(chunk.metadata or {})
+            chunk_id_material = f"{document_id}:{index}:{chunk.page_content}".encode()
+            metadata.update(
+                {
+                    "document_id": document_id,
+                    "chunk_id": hashlib.sha256(chunk_id_material).hexdigest(),
+                    "source_name": source_name,
+                }
+            )
+            section = metadata.get("Header 2") or metadata.get("Header 1")
+            if isinstance(section, str) and section:
+                metadata["section"] = section
+            chunk.metadata = metadata
 
     def _generate_hash(self, content: bytes) -> str:
         return hashlib.sha256(content).hexdigest()
