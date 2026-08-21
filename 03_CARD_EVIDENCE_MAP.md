@@ -482,8 +482,103 @@ After:  source file → stable document/chunk metadata → retrieved labelled ev
 - Human approval required before V1-C06: YES.
 
 ## V1-C06 — Retrieval Quality Evaluation
-**Status:** BLOCKED.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; no V1-C07 work started.
+
+### Contract Map / Risk Map
+
+- **Before:** `RetrieverBuilder` constructed BM25, Chroma vector retrieval, and a weighted `EnsembleRetriever`, but exposed only the production hybrid result. Existing tests proved the components could return documents, not whether they returned the expected C05 chunk evidence for known questions.
+- **Evaluation identity:** C05 `chunk_id` is the only relevance identity used by this Card. Golden fixtures also carry `document_id`, source name, and section, but metrics compare expected/retrieved chunk IDs rather than generated answers, citation prose, verification reports, or model claims.
+- **Fair comparison boundary:** the installed BM25 default is `k=4` while production vector retrieval uses `VECTOR_SEARCH_K`. C06 preserves the production hybrid constructor and adds `RetrieverBuilder.build_evaluation_modes(docs, k)`, which builds all three modes at the same explicit K.
+- **Out-of-scope boundary:** a query with no gold evidence is recorded but excluded from Hit Rate@K and Recall@K denominators. Existing retrievers still return their top chunks without an abstention threshold; C06 measures that fact rather than treating arbitrary retrieval as a correct out-of-scope answer.
+
+### Implementation / Evaluation Architecture
+
+```text
+golden source chunks + stable document_id/chunk_id
+→ temporary Chroma + deterministic EmbeddingProvider fake
+→ BM25-only | vector-only | weighted hybrid (common K=3)
+→ retrieved chunk IDs ∩ expected chunk IDs
+→ per-case results + Hit Rate@K + mean Recall@K
+```
+
+- `retriever/builder.py`: `RetrievalModes` and `build_evaluation_modes()` provide BM25/vector/hybrid comparators at one supplied K. `build_hybrid_retriever()` retains its existing production BM25 default and configured vector K behavior.
+- `evaluation/retrieval_fixtures.py`: five controlled chunks across four source documents, each with stable C05-style IDs; four answerable/multi-document questions and one out-of-scope question. `DeterministicKeywordEmbedding` is a local test fake, not a production provider.
+- `evaluation/retrieval_metrics.py`: validates fixture IDs, captures retrieved/matched IDs per case, computes Hit Rate@K and mean Recall@K only for answerable cases, and returns `None` rather than a fabricated score for an OOS-only evaluation.
+- `evaluation/run_retrieval_evaluation.py`: reproducible command-line runner using temporary Chroma storage and `K=3`.
+- `test/test_retrieval_evaluation.py`: fixture validation, unknown-ID rejection, deterministic ID matching, OOS denominator behavior, equal-K BM25/vector/hybrid evaluation, multi-document coverage, and repeatability.
+
+### Measured Baseline
+
+Run: `venv/bin/python -m evaluation.run_retrieval_evaluation`
+
+| Mode | Scored cases | OOS cases | Hit Rate@3 | Mean Recall@3 | Multi-document case |
+| --- | ---: | ---: | ---: | ---: | --- |
+| BM25-only | 4 | 1 | 1.00 | 1.00 | both expected chunks found |
+| Vector-only (deterministic fake) | 4 | 1 | 1.00 | 1.00 | both expected chunks found |
+| Hybrid BM25 + vector | 4 | 1 | 1.00 | 1.00 | both expected chunks found |
+
+The three modes tie on this deliberately small, controlled fixture. C06 therefore makes no claim that hybrid is better and makes no weight/K tuning change. The OOS geography case records no gold source and is unscored; each retriever still returned top chunks, demonstrating that retrieval evaluation is distinct from relevance/OOS routing.
+
+### Tests / Runtime
+
+- `venv/bin/python -m unittest discover -s test -p 'test_retrieval_evaluation.py' -v`: PASS — 6 focused C06 tests.
+- `venv/bin/python -m evaluation.run_retrieval_evaluation`: PASS — repeatable BM25/vector/hybrid baseline reported above at common `K=3`.
+- `venv/bin/python -m unittest discover -s test -p 'test_citation_grounding.py' -v`: PASS — 6 V1-C05 regression tests.
+- `venv/bin/python -m unittest discover -s test -p 'test_structured_contracts.py' -v`: PASS — 6 V1-C04 regression tests.
+- `venv/bin/python -m unittest discover -s test -p 'test_bounded_workflow.py' -v`: PASS — 8 V1-C03 regression tests.
+- `venv/bin/python -m unittest discover -s test -p 'test_provider_boundary.py' -v`: PASS — 10 V1-C02 provider/configuration/hybrid-retrieval regression tests.
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 36 deterministic tests total.
+- `venv/bin/python test/test1.py`: PASS — exit code `0`; retained Docling diagnostic has known malformed PNG-as-PDF and Docling/Torch warnings.
+- `venv/bin/python -m pip check`: PASS — `No broken requirements found`.
+- `venv/bin/python -m compileall -q app.py agents config document_processor providers retriever evaluation test`: PASS.
+- Active source/requirements IBM Watsonx, LangChain IBM, LangChain OpenAI, IBM endpoint/model scan: PASS — no active runtime coupling found.
+- No Ollama model was downloaded or invoked. Chroma telemetry emitted known non-blocking `capture()` warnings during temporary evaluation stores.
+
+### Learning Record
+
+**What we built / why:** A repeatable golden retrieval evaluation that asks a narrow question: did each retriever return the expected evidence chunks? It deliberately does not ask whether a model wrote a good answer.
+
+**How it works:**
+
+1. Version-controlled fixtures define controlled source chunks and their stable C05 IDs.
+2. Each question declares its expected relevant chunk IDs; a multi-document query expects two IDs and an OOS query expects none.
+3. BM25, vector, and hybrid run with the same K against temporary storage.
+4. Deterministic metrics compare retrieved IDs with expected IDs. Hit Rate@K means at least one expected chunk appeared in the first K; Recall@K means the fraction of all expected chunks that appeared in the first K.
+5. Answer text and verification never enter the calculation, so retrieval quality remains an independently testable property.
+
+**Architecture before → after:**
+
+```text
+Before: hybrid retrieval exists → answer looks plausible → retrieval quality assumed
+After:  golden question → expected C05 chunk IDs → mode-specific retrieved IDs
+        → repeatable Hit Rate@K / Recall@K evidence
+```
+
+**Professional engineering lesson:** Evaluation needs a fixed truth set and a stable identity boundary. Compare identical inputs and K across modes, record ties as ties, and do not tune parameters until a baseline measurement exists. Retrieval quality, answer quality, and verification quality are separate measurements with different failure causes.
+
+**Student takeaway:** A good-looking RAG answer can hide a retrieval failure. Golden retrieval evaluation checks the step before generation: whether the right evidence arrived. Only then can later Cards evaluate whether the answer used that evidence faithfully.
+
+### Exit Gate Proof
+
+- **Retrieval quality is measured, not assumed:** reproducible runner and 6 focused tests produce per-case ID overlap, Hit Rate@3, and Recall@3 for all three modes.
+- **Known evidence is comparable:** fixtures validate unique stable chunk IDs; expected IDs must exist in controlled source documents; unknown IDs fail validation.
+- **BM25/vector/hybrid comparison is fair:** all modes are built at the same explicit `K=3`, verified by test, and measured from the same five chunks/five questions.
+- **Multi-document and OOS are represented:** the multi-document case expects/retrieves both source chunks; the no-gold OOS case is retained but excluded from metrics rather than falsely passing.
+- **Completed architecture preserved:** all 30 C02–C05 regression tests pass; production hybrid construction, provider abstraction, bounded workflow, typed contracts, and citation grounding remain unchanged.
+- **No future Card leakage:** no retrieval tuning, answer/verification evaluation, prompt change, cloud provider, observability, or V1-C07 implementation was added.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused tests: PASS — 6 V1-C06 fixture/metric/mode/repeatability tests.
+- Relevant regression tests: PASS — 6 V1-C05 + 6 V1-C04 + 8 V1-C03 + 10 V1-C02 tests; 36 deterministic tests total; retained `test/test1.py` exit code `0`.
+- Card acceptance: PASS — golden dataset validation and all three common-K measurements executed with recorded results.
+- Exit Gate fully mapped to evidence: YES.
+- Evidence Map updated: YES.
+- Diff/state/secrets/generated-artifact review: PASS — only intended C06 evaluation, retriever-boundary, focused-test, and evidence files changed; `git diff --check`, `git status`, credential scan, and generated-artifact/temporary-Chroma check passed.
+- Known limitations: five controlled chunks are a foundation, not a representative corpus; deterministic fake vectors do not measure real Ollama embedding quality; OOS is unscored and does not add a retrieval abstention threshold. Claim/answer/verification quality is deferred to V1-C07.
+- Human approval required before V1-C07: YES.
 
 ## V1-C07 — Answer & Verification Evaluation Suite
 **Status:** BLOCKED.
