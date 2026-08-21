@@ -323,8 +323,76 @@ After:  verify PASS → VERIFIED → END
 - Human approval required before V1-C04: YES.
 
 ## V1-C04 — Structured Agent Contracts
-**Status:** BLOCKED.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; no V1-C05 work started.
+
+### Contract Map / Risk Map
+
+- **Before:** the relevance agent returned labels such as `CAN_ANSWER`; research returned a loose dictionary; verification parsed line-oriented free text, rendered a Markdown report, and C03 routing searched that report for `**Supported:** NO` or `**Relevant:** NO`. Human display formatting and machine routing were therefore coupled.
+- **Consumers/owners:** the provider boundary still exposes only `ChatProvider.generate()`. Each agent now owns parsing its own model output; `AgentState` owns typed per-run results and C03 retry/outcome state; `AgentWorkflow` owns deterministic routing; `app.py` continues to consume only `draft_answer` and `verification_report` for Gradio display.
+- **Risk controlled:** a label typo, bolding change, prose explanation, or schema mismatch can no longer silently change a route. Strict Pydantic validation rejects undeclared/coerced/malformed JSON. Known structured-output errors reach explicit `FAILURE`, while unrelated provider failures still propagate rather than being hidden.
+
+### Implementation / Typed Contracts
+
+- `agents/contracts.py`: strict Pydantic contracts for `RelevanceResult`, `ResearchResult`, `VerificationResult`, and `TerminalOutcome`; `StructuredOutputError` names malformed model output explicitly.
+- `RelevanceResult.decision` is a `RelevanceDecision` enum; `is_relevant` is derived deterministically. `ResearchResult` owns `draft_answer`. `VerificationResult` owns boolean `supported`/`relevant`, unsupported claims, contradictions, and correction feedback; `requires_research` derives retry control from booleans.
+- `agents/relevance_checker.py`, `agents/research_agent.py`, and `agents/verification_agent.py`: request strict JSON and parse it at their boundary. The human report is rendered by `VerificationResult.to_human_report()` only after typed validation.
+- `agents/workflow.py`: state now carries typed relevance/research/verification objects. Relevance routes on `result.is_relevant`; verification routes on `result.requires_research`; C03 `MAX_VERIFICATION_RETRIES`, retry counter, and `VERIFIED`/`OUT_OF_SCOPE`/`RETRY_EXHAUSTED` behavior are unchanged. A known `StructuredOutputError` produces an explicit `FAILURE` report and terminal route.
+- `test/test_bounded_workflow.py` and `test/test_provider_boundary.py`: deterministic C03/C02 fakes now return the approved JSON contract rather than legacy text. `test/test_structured_contracts.py` adds C04 contract/routing coverage.
+
+### Tests / Runtime
+
+- `venv/bin/python -m unittest discover -s test -p 'test_structured_contracts.py' -v`: PASS — 6 focused tests. Proves typed partial-relevance routing, boolean verification retry/success, typed retry exhaustion, display-formatting independence, malformed verification JSON → `FAILURE`, and strict rejection instead of coercion.
+- `venv/bin/python -m unittest discover -s test -p 'test_bounded_workflow.py' -v`: PASS — 8 V1-C03 bounded-loop/configuration tests.
+- `venv/bin/python -m unittest discover -s test -p 'test_provider_boundary.py' -v`: PASS — 10 V1-C02 provider/configuration/hybrid-retrieval tests.
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 24 deterministic focused/regression tests total.
+- `venv/bin/python test/test1.py`: PASS — exit code `0`; retained baseline parser diagnostic completed with known malformed PNG-as-PDF and Docling/Torch warnings.
+- `venv/bin/python -m pip check`: PASS — `No broken requirements found`.
+- `venv/bin/python -m compileall -q app.py agents config document_processor providers retriever test`: PASS.
+- Active source/requirements Watsonx, LangChain IBM, LangChain OpenAI, IBM project/endpoint/model construction scan: PASS.
+- Application integration: PASS — temporary `GRADIO_SERVER_PORT=7863` process bound `127.0.0.1:7863` and returned HTTP `200`; it was stopped cleanly. Generated `./.gradio/certificate.pem` and `./:memory:.ses` were inspected and removed.
+- No Ollama model was downloaded. C04 structural behavior uses deterministic fakes; no prompt/retrieval-quality tuning was performed.
+
+### Learning Record
+
+**What we built / why:** Explicit Pydantic handoff contracts between three reasoning agents and the deterministic LangGraph coordinator. The old system treated a display string as an API; C04 makes the API machine-readable and keeps the display report separate.
+
+**Architecture before → after:**
+
+```text
+Before: model text → ad hoc parser → Markdown report → string search → route
+After:  model JSON → Pydantic result → typed workflow state → enum/boolean route
+                         └──────────────────────────────→ human-readable report
+```
+
+**How communication now works:** Relevance produces an enum decision and explanation; research produces a typed draft; verification produces booleans, lists, and correction feedback. The workflow does not inspect `verification_report`: it checks `VerificationResult.requires_research`. The UI receives a report rendered from the validated result, so changing Markdown labels cannot alter control flow.
+
+**Malformed-output behavior:** Invalid JSON, missing fields, extra fields, or incompatible types raise `StructuredOutputError`. The workflow catches that specific contract error, returns `FAILURE` with an understandable report, and terminates without spending retry budget or pretending verification succeeded. Provider failures are not swallowed.
+
+**Professional engineering lesson:** Agent messages are interfaces, not just prose. Define a schema at the producer boundary, validate it before routing, and keep human presentation downstream. This makes routing testable with ordinary deterministic unit tests even when model output is probabilistic.
+
+**Student takeaway:** In an agentic system, use the model for reasoning content but use typed state for program decisions. A sentence that looks like a status is not reliable control data; a validated boolean or enum is.
+
+### Exit Gate Proof
+
+- **No fragile free-text control parsing:** workflow routes from `RelevanceResult.is_relevant` and `VerificationResult.requires_research`; it contains no `Supported:`/`Relevant:` report-text predicate.
+- **All required C03 terminal behavior remains:** boolean verification success → `VERIFIED`; typed failure obeys configured retry budget; exhausted budget → `RETRY_EXHAUSTED`; relevance rejection → `OUT_OF_SCOPE`.
+- **Formatting cannot alter routing:** focused test includes misleading `**Supported:** NO` in human feedback while typed `supported=True` correctly ends `VERIFIED`.
+- **Malformed output is explicit:** focused test proves malformed verification text reaches `FAILURE`, no retry, and no silent route.
+- **V1-C02/C03 baseline preserved:** all 18 regression tests, hybrid retrieval, provider injection, configured Gradio HTTP startup, and active vendor-boundary scan passed.
+- **No future Card leakage:** no citations/source IDs, retrieval evaluation, prompt-quality tuning, cloud provider, or V1-C05 implementation was added.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused tests: PASS — 6 typed-contract/routing tests.
+- Relevant regression tests: PASS — 8 V1-C03 + 10 V1-C02 tests; 24 deterministic tests total; `test/test1.py` exit code `0`.
+- Card acceptance: PASS — typed relevance/verification routing, bounded retry/exhaustion, formatting independence, and malformed structured output behavior are all demonstrated.
+- Exit Gate fully mapped to evidence: YES.
+- Evidence Map updated: YES.
+- Diff/state/secrets/generated-artifact review: PASS — complete changed-file review, `git diff --check`, `git status`, credential-assignment scan, and generated-artifact check completed; temporary Gradio/test artifacts were removed.
+- Known limitations: strict JSON compliance remains a model/runtime behavior to evaluate separately; C04 reports malformed output safely but does not add broader provider/retriever fallback policy (V1-C09). No source/citation work is present (V1-C05).
+- Human approval required before V1-C05: YES.
 
 ## V1-C05 — Source & Citation Grounding
 **Status:** BLOCKED.
