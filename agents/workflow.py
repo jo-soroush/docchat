@@ -1,7 +1,9 @@
 """LangGraph orchestration using typed agent contracts for all control flow."""
 
 import logging
+from time import perf_counter
 from typing import TypedDict
+from uuid import uuid4
 
 from langchain.retrievers import EnsembleRetriever
 from langchain.schema import Document
@@ -21,6 +23,7 @@ from .contracts import (
 from .citations import format_citation_report
 from .relevance_checker import RelevanceChecker
 from .research_agent import ResearchAgent
+from .run_trace import RunTrace, RunTraceEvent, TraceStage
 from .verification_agent import VerificationAgent
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,9 @@ class AgentState(TypedDict):
     citations: list[SourceCitation]
     verification_result: VerificationResult | None
     structured_error: str
+    run_id: str
+    trace_started_at: float
+    trace_events: list[RunTraceEvent]
 
 
 class AgentWorkflow:
@@ -94,8 +100,11 @@ class AgentWorkflow:
         return workflow.compile()
 
     def full_pipeline(self, question: str, retriever: EnsembleRetriever):
+        trace_started_at = perf_counter()
         documents = retriever.invoke(question)
         logger.info("Retrieved %s relevant documents.", len(documents))
+        run_id = uuid4().hex
+        retrieved_chunk_ids = self._retrieved_chunk_ids(documents)
         initial_state = AgentState(
             question=question,
             documents=documents,
@@ -109,6 +118,18 @@ class AgentWorkflow:
             citations=[],
             verification_result=None,
             structured_error="",
+            run_id=run_id,
+            trace_started_at=trace_started_at,
+            trace_events=[
+                RunTraceEvent(
+                    stage=TraceStage.RETRIEVAL,
+                    elapsed_ms=self._elapsed_ms(trace_started_at),
+                    stage_latency_ms=self._elapsed_ms(trace_started_at),
+                    retrieved_chunk_ids=retrieved_chunk_ids,
+                    attempt=0,
+                    route="check_relevance",
+                )
+            ],
         )
         final_state = self.compiled_workflow.invoke(initial_state)
         relevance_result = final_state["relevance_result"]
@@ -126,11 +147,17 @@ class AgentWorkflow:
             "verification_result": (
                 verification_result.model_dump() if verification_result is not None else None
             ),
+            "run_trace": RunTrace(
+                run_id=final_state["run_id"],
+                duration_ms=self._elapsed_ms(final_state["trace_started_at"]),
+                events=final_state["trace_events"],
+            ).model_dump(mode="json"),
             "citations": [citation.model_dump() for citation in final_state["citations"]],
             "citation_report": format_citation_report(final_state["citations"]),
         }
 
     def _check_relevance_step(self, state: AgentState) -> dict:
+        stage_started_at = perf_counter()
         try:
             result = self.relevance_checker.check(
                 question=state["question"],
@@ -139,42 +166,99 @@ class AgentWorkflow:
             )
         except StructuredOutputError as exc:
             return self._structured_failure(
-                "The relevance model returned malformed structured output.", exc
+                state,
+                "The relevance model returned malformed structured output.",
+                exc,
+                TraceStage.RELEVANCE,
+                self._elapsed_ms(stage_started_at),
             )
 
+        route = "relevant" if result.is_relevant else "irrelevant"
         if result.is_relevant:
-            return {"relevance_result": result}
+            return {
+                "relevance_result": result,
+                "trace_events": self._append_trace(
+                    state,
+                    self._trace_event(
+                        state,
+                        TraceStage.RELEVANCE,
+                        relevance_decision=result.decision,
+                        route=route,
+                        stage_latency_ms=self._elapsed_ms(stage_started_at),
+                    ),
+                ),
+            }
         return {
             "relevance_result": result,
             "draft_answer": (
                 "This question is not related to the uploaded document(s), or the "
                 "documents do not contain enough information to answer it."
             ),
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    TraceStage.RELEVANCE,
+                    relevance_decision=result.decision,
+                    route=route,
+                    stage_latency_ms=self._elapsed_ms(stage_started_at),
+                ),
+            ),
         }
 
     def _research_step(self, state: AgentState) -> dict:
+        stage_started_at = perf_counter()
         try:
             result = self.researcher.generate(state["question"], state["documents"])
         except StructuredOutputError as exc:
             return self._structured_failure(
-                "The research model returned malformed structured output.", exc
+                state,
+                "The research model returned malformed structured output.",
+                exc,
+                TraceStage.RESEARCH,
+                self._elapsed_ms(stage_started_at),
             )
         return {
             "research_result": result,
             "draft_answer": result.draft_answer,
             "citations": result.citations,
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    TraceStage.RESEARCH,
+                    stage_latency_ms=self._elapsed_ms(stage_started_at),
+                ),
+            ),
         }
 
     def _verification_step(self, state: AgentState) -> dict:
+        stage_started_at = perf_counter()
         try:
             result = self.verifier.check(state["draft_answer"], state["documents"])
         except StructuredOutputError as exc:
             return self._structured_failure(
-                "The verification model returned malformed structured output.", exc
+                state,
+                "The verification model returned malformed structured output.",
+                exc,
+                TraceStage.VERIFICATION,
+                self._elapsed_ms(stage_started_at),
             )
+        route = self._verification_route(state, result)
         return {
             "verification_result": result,
             "verification_report": result.to_human_report(),
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    TraceStage.VERIFICATION,
+                    verification_supported=result.supported,
+                    verification_relevant=result.relevant,
+                    route=route,
+                    stage_latency_ms=self._elapsed_ms(stage_started_at),
+                ),
+            ),
         }
 
     def _decide_after_relevance_check(self, state: AgentState) -> str:
@@ -194,35 +278,82 @@ class AgentWorkflow:
         result = state["verification_result"]
         if result is None:
             return "failure"
+        return self._verification_route(state, result)
+
+    def _verification_route(self, state: AgentState, result: VerificationResult) -> str:
         if not result.requires_research:
             return "verified"
         if state["verification_retries"] < self.config.MAX_VERIFICATION_RETRIES:
             return "re_research"
         return "retry_exhausted"
 
-    @staticmethod
-    def _structured_failure(message: str, _: StructuredOutputError) -> dict:
+    def _structured_failure(
+        self,
+        state: AgentState,
+        message: str,
+        _: StructuredOutputError,
+        stage: TraceStage,
+        stage_latency_ms: float,
+    ) -> dict:
         return {
             "draft_answer": message,
             "verification_report": f"**Workflow Outcome:** FAILURE\n{message}",
             "terminal_outcome": TerminalOutcome.FAILURE,
             "structured_error": message,
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    stage,
+                    route="failure",
+                    safe_error=message,
+                    stage_latency_ms=stage_latency_ms,
+                ),
+            ),
         }
 
-    @staticmethod
-    def _mark_out_of_scope_step(_: AgentState) -> dict:
-        return {"terminal_outcome": TerminalOutcome.OUT_OF_SCOPE}
+    def _mark_out_of_scope_step(self, state: AgentState) -> dict:
+        return {
+            "terminal_outcome": TerminalOutcome.OUT_OF_SCOPE,
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    TraceStage.TERMINAL,
+                    terminal_outcome=TerminalOutcome.OUT_OF_SCOPE,
+                ),
+            ),
+        }
 
-    @staticmethod
-    def _record_retry_step(state: AgentState) -> dict:
-        return {"verification_retries": state["verification_retries"] + 1}
+    def _record_retry_step(self, state: AgentState) -> dict:
+        next_attempt = state["verification_retries"] + 1
+        return {
+            "verification_retries": next_attempt,
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    TraceStage.ROUTING,
+                    attempt=next_attempt,
+                    route="re_research",
+                ),
+            ),
+        }
 
-    @staticmethod
-    def _mark_verified_step(_: AgentState) -> dict:
-        return {"terminal_outcome": TerminalOutcome.VERIFIED}
+    def _mark_verified_step(self, state: AgentState) -> dict:
+        return {
+            "terminal_outcome": TerminalOutcome.VERIFIED,
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    TraceStage.TERMINAL,
+                    terminal_outcome=TerminalOutcome.VERIFIED,
+                ),
+            ),
+        }
 
-    @staticmethod
-    def _mark_retry_exhausted_step(state: AgentState) -> dict:
+    def _mark_retry_exhausted_step(self, state: AgentState) -> dict:
         retries = state["verification_retries"]
         message = (
             "Verification was not achieved after "
@@ -234,11 +365,73 @@ class AgentWorkflow:
                 f"**Workflow Outcome:** RETRY_EXHAUSTED\n{message}"
             ),
             "terminal_outcome": TerminalOutcome.RETRY_EXHAUSTED,
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    TraceStage.TERMINAL,
+                    terminal_outcome=TerminalOutcome.RETRY_EXHAUSTED,
+                ),
+            ),
         }
 
-    @staticmethod
-    def _mark_failure_step(state: AgentState) -> dict:
-        if state["verification_report"]:
-            return {}
+    def _mark_failure_step(self, state: AgentState) -> dict:
         message = state["structured_error"] or "The workflow could not reach a typed terminal state."
-        return {"verification_report": f"**Workflow Outcome:** FAILURE\n{message}"}
+        result = {
+            "trace_events": self._append_trace(
+                state,
+                self._trace_event(
+                    state,
+                    TraceStage.TERMINAL,
+                    terminal_outcome=TerminalOutcome.FAILURE,
+                    safe_error=message,
+                ),
+            )
+        }
+        if not state["verification_report"]:
+            result["verification_report"] = f"**Workflow Outcome:** FAILURE\n{message}"
+        return result
+
+    @staticmethod
+    def _elapsed_ms(trace_started_at: float) -> float:
+        return max(0.0, (perf_counter() - trace_started_at) * 1000)
+
+    @staticmethod
+    def _retrieved_chunk_ids(documents: list[Document]) -> list[str]:
+        return [
+            chunk_id
+            for document in documents
+            if isinstance((chunk_id := document.metadata.get("chunk_id")), str) and chunk_id
+        ]
+
+    def _trace_event(
+        self,
+        state: AgentState,
+        stage: TraceStage,
+        *,
+        relevance_decision=None,
+        attempt: int | None = None,
+        verification_supported: bool | None = None,
+        verification_relevant: bool | None = None,
+        route: str | None = None,
+        terminal_outcome: TerminalOutcome | None = None,
+        safe_error: str | None = None,
+        stage_latency_ms: float = 0.0,
+    ) -> RunTraceEvent:
+        return RunTraceEvent(
+            stage=stage,
+            elapsed_ms=self._elapsed_ms(state["trace_started_at"]),
+            stage_latency_ms=stage_latency_ms,
+            retrieved_chunk_ids=self._retrieved_chunk_ids(state["documents"]),
+            relevance_decision=relevance_decision,
+            attempt=state["verification_retries"] if attempt is None else attempt,
+            verification_supported=verification_supported,
+            verification_relevant=verification_relevant,
+            route=route,
+            terminal_outcome=terminal_outcome,
+            safe_error=safe_error,
+        )
+
+    @staticmethod
+    def _append_trace(state: AgentState, event: RunTraceEvent) -> list[RunTraceEvent]:
+        return [*state["trace_events"], event]
