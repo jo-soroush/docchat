@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # Gradio binds locally by default; override for a local port conflict.
     GRADIO_SERVER_PORT: int = Field(default=7860, ge=1, le=65535)
 
+    # Re-research attempts after the initial research/verification pass.
+    MAX_VERIFICATION_RETRIES: int = Field(default=2, ge=0, le=5)
+
     # Optional settings with defaults
     MAX_FILE_SIZE: int = MAX_FILE_SIZE
     MAX_TOTAL_SIZE: int = MAX_TOTAL_SIZE

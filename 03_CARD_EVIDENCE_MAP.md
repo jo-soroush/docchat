@@ -251,8 +251,76 @@ Future: DocChat Core → same contracts → optional Local / Cloud provider adap
 - Human approval required before V1-C03: YES.
 
 ## V1-C03 — Bounded Research / Verification Loop
-**Status:** BLOCKED — dependency chain not satisfied.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; no V1-C04 work started.
+
+### Contract Map / Risk Map
+
+- **Before:** `AgentWorkflow.full_pipeline()` retrieved documents and invoked `AgentState(question, documents, draft_answer, verification_report, is_relevant, retriever)`. The `verify` conditional routed directly back to `research` whenever it considered the free-text report unsuccessful. State had no retry count, no configured limit, and no explicit terminal outcome, so a persistent failed verification could re-enter the cycle indefinitely.
+- **Actual routing defect discovered:** `VerificationAgent.format_verification_report()` emits bold labels such as `**Supported:** NO`, while the inherited router searched for `Supported: NO`. The previous re-research condition therefore did not recognize its own formatted failure output. C03 corrects this narrow orchestration predicate without redesigning the agent prompt/parser; typed verification contracts remain V1-C04 work.
+- **Preserved path:** Gradio upload/question → document processing/cache/chunking → injected embedding provider → Chroma + BM25 hybrid retriever → relevance → research → verification → Gradio answer/report. Provider contracts and Ollama remain unchanged.
+- **Risk controlled:** model/retrieval quality is separate from loop safety. A model can repeatedly request correction, but only the deterministic workflow state and configured policy decide whether another attempt is allowed.
+
+### Implementation / Configuration
+
+- `config/settings.py:Settings.MAX_VERIFICATION_RETRIES`: environment-backed retry budget, default `2`, validated inclusive range `0..5`. It counts re-research attempts after the initial research/verification pass.
+- `.env.example`: documents the non-secret local setting.
+- `agents/workflow.py:AgentState`: explicitly stores `verification_retries` and `terminal_outcome`.
+- `AgentWorkflow`: accepts the existing settings owner, adds deterministic `record_retry`, `mark_verified`, `mark_out_of_scope`, and `mark_retry_exhausted` nodes, and returns retry/outcome metadata alongside the existing answer/report keys. Gradio continues consuming its unchanged answer and report keys.
+- Verification success reaches `VERIFIED`; relevance rejection reaches `OUT_OF_SCOPE`; an unsuccessful verification with remaining budget increments state and returns to research; exhausted budget reaches `RETRY_EXHAUSTED` and appends an explicit non-success outcome to the verification report while retaining the last draft answer. Provider/model failures still propagate rather than being falsely reported as verification success; controlled infrastructure fallbacks remain V1-C09 scope.
+
+### Tests / Runtime
+
+- `venv/bin/python -m unittest discover -s test -p 'test_bounded_workflow.py' -v`: PASS — 8 deterministic tests. Proves immediate success, failure then success, repeated failure exhaustion, zero and maximum budgets, out-of-scope termination, configuration range validation, and environment override.
+- `venv/bin/python -m unittest discover -s test -p 'test_provider_boundary.py' -v`: PASS — 10 V1-C02 regression tests for provider injection, Ollama adapters, configuration, hybrid retrieval, workflow construction, and active vendor-import guard.
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 18 focused/regression tests total.
+- `venv/bin/python test/test1.py`: PASS — exit code `0`; retained baseline parser diagnostic executed with its known malformed PNG-as-PDF limitation.
+- `venv/bin/python -m pip check`: PASS — `No broken requirements found`.
+- `venv/bin/python -m compileall -q app.py agents config document_processor providers retriever test`: PASS.
+- Active source/requirements Watsonx, LangChain IBM, LangChain OpenAI, IBM project/endpoint/model construction scan: PASS.
+- Application integration: PASS — temporary `GRADIO_SERVER_PORT=7862` process bound `127.0.0.1:7862` and returned HTTP `200`; it was stopped cleanly. Generated `./.gradio/certificate.pem` and `./:memory:.ses` artifacts were inspected and removed.
+- Non-blocking warnings observed: the existing LangGraph pending-deprecation warning, Chroma telemetry warnings, and torch/Docling accelerator warnings. They did not alter exit status or test assertions.
+
+### Learning Record
+
+**What we built / why:** A deterministic retry budget around an otherwise probabilistic Research → Verification correction cycle. An agentic system must not let a model-generated failure signal determine how long it continues running.
+
+**How retry state works:** Start with `verification_retries = 0`. Research and verification always receive one initial attempt. On formatted verification failure, the workflow compares the counter with `MAX_VERIFICATION_RETRIES`; if below it, `record_retry` increments state before re-research. Once equal to the limit, the graph takes the explicit exhausted terminal node. With default `2`, a query has at most three research/verification attempts.
+
+**Architecture before → after:**
+
+```text
+Before: verify failure → research → verify → ... (no state budget; potentially unbounded)
+After:  verify PASS → VERIFIED → END
+        verify FAIL + retries remaining → record retry → research
+        verify FAIL + budget exhausted → RETRY_EXHAUSTED → END
+```
+
+**Important ownership:** Settings owns the configurable policy; `AgentState` owns per-run counter/outcome data; LangGraph routing owns deterministic termination; Research/Verification retain their existing reasoning roles; the UI displays the existing answer/report contract. The provider boundary is not involved in retry policy.
+
+**Professional engineering lesson:** Reliability requires an orchestration budget independent of model quality. Test the route graph with deterministic fakes, count attempts explicitly, and make exhausted work visible to callers instead of silently looping or labeling an unverified answer as verified.
+
+**Student takeaway:** Agentic loops need two different kinds of logic: probabilistic agents can suggest whether more work is useful, but deterministic program state must decide whether more work is permitted. This separates verification quality from a hard termination guarantee.
+
+### Exit Gate Proof
+
+- **No unbounded research/verification loop:** every verification route leads to `VERIFIED`, bounded `record_retry`, or `RETRY_EXHAUSTED`; the counter can increase only until validated configured maximum `5`.
+- **Successful verification preserved:** immediate and retry-then-success tests end `VERIFIED` with the expected number of provider calls.
+- **Repeated failure is safe and explicit:** exhaustion test terminates after exactly the configured two re-research attempts, preserves the final draft, and reports `RETRY_EXHAUSTED`; the zero-budget test proves the minimum boundary.
+- **Baseline and V1-C02 regression preserved:** all 10 provider-boundary tests, hybrid retrieval test, existing diagnostic, vendor scan, and configured Gradio HTTP startup passed.
+- **No future Card leakage:** no typed agent-schema redesign, prompt/retrieval tuning, provider change, cloud integration, or V1-C04 implementation was added.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused tests: PASS — 8 bounded-loop/configuration tests.
+- Relevant regression tests: PASS — 10 V1-C02 tests and 18 focused/regression tests total; `test/test1.py` exit code `0`.
+- Card acceptance: PASS — every required success/failure/minimum/exhaustion path terminates deterministically with fake providers.
+- Exit Gate fully mapped to evidence: YES.
+- Evidence Map updated: YES.
+- Diff/state/secrets/generated-artifact review: PASS — complete changed-file review, `git diff --check`, `git status`, credential-assignment scan, and generated-artifact check completed; the temporary Gradio artifacts were removed.
+- Known limitations: verification routing still consumes the existing free-text report; V1-C04 owns typed contracts. Provider failures propagate truthfully and V1-C09 owns controlled fallback outcomes. The V1-C02 synthetic `NO_MATCH` retrieval observation was not tuned.
+- Human approval required before V1-C04: YES.
 
 ## V1-C04 — Structured Agent Contracts
 **Status:** BLOCKED.
