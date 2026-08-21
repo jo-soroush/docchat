@@ -753,8 +753,70 @@ During C08 implementation, cumulative elapsed time alone would not identify whic
 V1-C09 can use the safe C08 trace to prove controlled handling of known parser, retrieval, embedding, model, zero-document, cache, and partial-processing failures. It must own the actual fallback behavior and must not be started without separate approval.
 
 ## V1-C09 — Robust Error Handling & Fallbacks
-**Status:** BLOCKED.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; V1-C10 has not started.
+
+### Contract Map / Risk Map
+
+- **Baseline:** document processing skipped per-file failures after logging raw details; corrupt cache data could abort processing; empty usable output could reach retrieval; retriever construction re-raised raw failures; provider/retrieval invocation failures were not represented as C08 traces; the UI displayed arbitrary exception text.
+- **Ownership:** `DocumentProcessor` owns file/parse/cache outcomes; `RetrieverBuilder` owns construction failures; `ProviderError` is the provider-boundary signal; `AgentWorkflow` owns safe terminal query failures plus C08 tracing; `app.py` owns safe user presentation. No layer fabricates an answer, citation, verification success, or retry after infrastructure failure.
+
+### Implementation / Behavior
+
+- `providers/contracts.py`: adds vendor-neutral `ProviderError`; Ollama's existing error type subclasses it.
+- `document_processor/file_handler.py`: adds `DocumentProcessingError`; parser failures, unavailable files, corrupt pickle/cache data, and zero usable chunks have deterministic outcomes. A corrupt cache is deleted and rebuilt once from source; an unavailable file does not prevent another upload from succeeding; per-file logging no longer includes raw exception detail.
+- `retriever/builder.py`: wraps construction failure as `RetrievalError` without raw provider details.
+- `agents/workflow.py`: provider failures at relevance/research/verification and both typed and third-party retrieval-invocation failures end as typed `FAILURE`, with empty citations and C08 safe trace events. Retry behavior remains bounded and is not used as an infrastructure fallback.
+- `app.py`: renders only controlled document/retrieval messages; unexpected errors get one generic safe message rather than exception text.
+- `test/test_robust_failures.py`: deterministic injected failures prove provider/retrieval terminals, cache rebuild, explicit no-usable-content outcome, and build-error wrapping.
+
+### Baseline → Final Evidence
+
+| Failure | Final controlled outcome |
+| --- | --- |
+| Provider during workflow | `FAILURE`, generic stage-specific safe trace error; no raw detail |
+| Retriever invocation | `FAILURE`, empty citations, retrieval/terminal C08 events |
+| Embedding/retriever build | `RetrievalError("Document retrieval could not be initialized.")` |
+| Corrupt cache | cache removed, source reparsed once |
+| Parser/unavailable file in a partial upload | controlled file failure; another usable upload still proceeds |
+| No usable document chunks | `DocumentProcessingError`, no retrieval attempt |
+
+### Tests / Validation
+
+- `venv/bin/python -m unittest discover -s test -p 'test_robust_failures.py' -v`: PASS — 8/8 focused injected-failure tests, including zero-document, parser, partial-upload, corrupt-cache, zero-content, provider, typed/untyped retriever, and embedding-build paths.
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 54/54 deterministic tests: C02 10, C03 8, C04 6, C05 6, C06 6, C07 6, C08 4, C09 8.
+- C06 retrieval and C07 answer/verification runners: PASS — unchanged controlled baselines.
+- `venv/bin/python test/test1.py`: PASS — inherited Docling/document-processing regression (warnings only).
+- `pip check` and Python compilation: PASS. Gradio HTTP validation: PASS — bound at local port `7861`, then stopped cleanly.
+- IBM/Watsonx/OpenAI active-runtime scan: PASS — only C02's negative import test contains forbidden SDK names.
+
+### Learning Record
+
+**Problem solved:** Known external/file/cache failures are now explicit at their owning boundary rather than becoming raw UI text, silent partial success, or fabricated workflow output.
+
+**Professional lesson:** A fallback is safe only when its trigger and result are explicit. Rebuild a corrupt cache from its source; do not retry a failed provider as if it produced evidence; make terminal infrastructure failure visible in the same safe trace used for normal workflow decisions.
+
+**Student takeaway:** Error handling in an agentic RAG system is part of correctness. A friendly failure message, typed terminal state, empty citations, and trace evidence are more trustworthy than a plausible-looking answer after an upstream service failed.
+
+### Exit Gate Proof
+
+- Known parse/file/cache/retriever/provider/zero-content paths have controlled outcomes and focused tests.
+- Provider and retrieval failure cannot become verified answer/citation output; C08 records safe terminal traces.
+- Primary C02–C08 behavior remains green (46/46 regressions); C09 adds 8/8 focused failures for 54/54 total.
+- No prompt/retrieval/model tuning, provider redesign, telemetry backend, model download, or V1-C10 work was added.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused C09: PASS — 8/8.
+- C02–C08 regressions: PASS — 46/46; full suite 54/54.
+- Dependency/static/evaluation checks: PASS.
+- Diff/state/secrets/artifact review: PASS — only intended C09 boundary, workflow, UI-safe-presentation, focused-test, and evidence files changed; `git diff --check` passed; generated caches and `:memory:.ses` were removed; no `.env`, credentials, local models, or temporary Chroma data remain.
+- Human approval is required before commit/delivery and before V1-C10: YES.
+
+### What V1-C10 Builds On Next
+
+V1-C10 can add study/research product operations over these controlled backend outcomes without embedding workflow or error logic in the Gradio UI.
 
 ## V1-C10 — Research Assistant Product Experience
 **Status:** BLOCKED.

@@ -11,6 +11,10 @@ from providers.contracts import EmbeddingProvider
 logger = logging.getLogger(__name__)
 
 
+class RetrievalError(RuntimeError):
+    """Safe failure while constructing DocChat retrieval components."""
+
+
 @dataclass(frozen=True)
 class RetrievalModes:
     """Comparable retrievers built from the same documents and common result limit."""
@@ -70,6 +74,6 @@ class RetrieverBuilder:
                 vector=vector_retriever,
                 hybrid=hybrid_retriever,
             )
-        except Exception as e:
-            logger.error(f"Failed to build hybrid retriever: {e}")
-            raise
+        except Exception as exc:
+            logger.error("Failed to build hybrid retriever.")
+            raise RetrievalError("Document retrieval could not be initialized.") from exc
