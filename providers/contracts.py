@@ -3,6 +3,10 @@
 from typing import Protocol, Sequence
 
 
+class ProviderError(RuntimeError):
+    """Safe provider-boundary failure exposed to DocChat core."""
+
+
 class ChatProvider(Protocol):
     """Generate one text response from a complete prompt."""
 

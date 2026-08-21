@@ -4,7 +4,8 @@ from typing import List, Dict
 import os
 
 from document_processor.file_handler import DocumentProcessor
-from retriever.builder import RetrieverBuilder
+from retriever.builder import RetrievalError, RetrieverBuilder
+from document_processor.file_handler import DocumentProcessingError
 from agents.workflow import AgentWorkflow
 from providers.factory import build_runtime_providers
 from config import constants
@@ -188,9 +189,12 @@ def main():
                     state,
                 )
                     
-            except Exception as e:
-                logger.error(f"Processing error: {str(e)}")
-                return f"❌ Error: {str(e)}", "", "", state
+            except (DocumentProcessingError, RetrievalError) as exc:
+                logger.error("Controlled document or retrieval failure.")
+                return f"❌ {exc}", "", "", state
+            except Exception:
+                logger.error("Unexpected application failure.")
+                return "❌ Processing could not be completed safely.", "", "", state
 
         submit_btn.click(
             fn=process_question,

@@ -10,6 +10,10 @@ from config import constants
 from config.settings import settings
 from utils.logging import logger
 
+
+class DocumentProcessingError(ValueError):
+    """Safe document-ingestion failure suitable for UI presentation."""
+
 class DocumentProcessor:
     def __init__(self):
         self.headers = [("#", "Header 1"), ("##", "Header 2")]
@@ -18,7 +22,16 @@ class DocumentProcessor:
         
     def validate_files(self, files: List) -> None:
         """Validate the total size of the uploaded files."""
-        total_size = sum(os.path.getsize(f.name) for f in files)
+        if not files:
+            raise DocumentProcessingError("No documents were provided.")
+        total_size = 0
+        for file in files:
+            try:
+                total_size += os.path.getsize(file.name)
+            except OSError:
+                # A later per-file processing step records the controlled
+                # failure while permitting another uploaded file to succeed.
+                logger.error("An uploaded file was unavailable for validation.")
         if total_size > constants.MAX_TOTAL_SIZE:
             raise ValueError(f"Total size exceeds {constants.MAX_TOTAL_SIZE//1024//1024}MB limit")
 
@@ -37,8 +50,14 @@ class DocumentProcessor:
                 cache_path = self.cache_dir / f"{file_hash}.pkl"
                 
                 if self._is_cache_valid(cache_path):
-                    logger.info(f"Loading from cache: {file.name}")
-                    chunks = self._load_from_cache(cache_path)
+                    try:
+                        logger.info(f"Loading from cache: {file.name}")
+                        chunks = self._load_from_cache(cache_path)
+                    except (OSError, pickle.UnpicklingError, KeyError, TypeError):
+                        logger.warning("Invalid document cache; rebuilding from source.")
+                        cache_path.unlink(missing_ok=True)
+                        chunks = self._process_file(file)
+                        self._save_to_cache(chunks, cache_path)
                 else:
                     logger.info(f"Processing and caching: {file.name}")
                     chunks = self._process_file(file)
@@ -53,11 +72,13 @@ class DocumentProcessor:
                         all_chunks.append(chunk)
                         seen_hashes.add(chunk_hash)
                         
-            except Exception as e:
-                logger.error(f"Failed to process {file.name}: {str(e)}")
+            except (OSError, ValueError, pickle.UnpicklingError):
+                logger.error("Failed to process an uploaded document.")
                 continue
                 
         logger.info(f"Total unique chunks: {len(all_chunks)}")
+        if not all_chunks:
+            raise DocumentProcessingError("No usable document content could be extracted.")
         return all_chunks
 
     def _process_file(self, file) -> List:
@@ -66,8 +87,16 @@ class DocumentProcessor:
             logger.warning(f"Skipping unsupported file type: {file.name}")
             return []
 
-        converter = DocumentConverter()
-        markdown = converter.convert(file.name).document.export_to_markdown()
+        try:
+            converter = DocumentConverter()
+            markdown = converter.convert(file.name).document.export_to_markdown()
+        except Exception as exc:
+            # Docling is an external parser boundary.  Do not expose its raw
+            # errors to the workflow or UI; the caller decides whether another
+            # uploaded file can still be used.
+            raise DocumentProcessingError(
+                "Document content could not be extracted."
+            ) from exc
         splitter = MarkdownHeaderTextSplitter(self.headers)
         return splitter.split_text(markdown)
 

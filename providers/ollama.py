@@ -4,10 +4,10 @@ from collections.abc import Sequence
 
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
-from .contracts import ChatProvider, EmbeddingProvider
+from .contracts import ChatProvider, EmbeddingProvider, ProviderError
 
 
-class OllamaProviderError(RuntimeError):
+class OllamaProviderError(ProviderError):
     """Raised when the configured local Ollama service cannot complete a request."""
 
 

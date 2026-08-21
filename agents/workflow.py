@@ -11,6 +11,8 @@ from langgraph.graph import END, StateGraph
 
 from config.settings import Settings, settings
 from providers.contracts import ChatProvider
+from providers.contracts import ProviderError
+from retriever.builder import RetrievalError
 
 from .contracts import (
     RelevanceResult,
@@ -101,9 +103,22 @@ class AgentWorkflow:
 
     def full_pipeline(self, question: str, retriever: EnsembleRetriever):
         trace_started_at = perf_counter()
-        documents = retriever.invoke(question)
-        logger.info("Retrieved %s relevant documents.", len(documents))
         run_id = uuid4().hex
+        try:
+            documents = retriever.invoke(question)
+        except (ProviderError, RetrievalError):
+            return self._initial_failure_result(
+                run_id, trace_started_at, "Document retrieval was unavailable."
+            )
+        except Exception:
+            # A LangChain retriever is an external integration boundary. Its
+            # implementation-specific errors must not become an answer or
+            # bypass the safe C08 terminal trace.
+            logger.error("Document retrieval invocation failed.")
+            return self._initial_failure_result(
+                run_id, trace_started_at, "Document retrieval was unavailable."
+            )
+        logger.info("Retrieved %s relevant documents.", len(documents))
         retrieved_chunk_ids = self._retrieved_chunk_ids(documents)
         initial_state = AgentState(
             question=question,
@@ -172,6 +187,11 @@ class AgentWorkflow:
                 TraceStage.RELEVANCE,
                 self._elapsed_ms(stage_started_at),
             )
+        except ProviderError as exc:
+            return self._structured_failure(
+                state, "The relevance provider was unavailable.", exc, TraceStage.RELEVANCE,
+                self._elapsed_ms(stage_started_at),
+            )
 
         route = "relevant" if result.is_relevant else "irrelevant"
         if result.is_relevant:
@@ -218,6 +238,11 @@ class AgentWorkflow:
                 TraceStage.RESEARCH,
                 self._elapsed_ms(stage_started_at),
             )
+        except ProviderError as exc:
+            return self._structured_failure(
+                state, "The research provider was unavailable.", exc, TraceStage.RESEARCH,
+                self._elapsed_ms(stage_started_at),
+            )
         return {
             "research_result": result,
             "draft_answer": result.draft_answer,
@@ -242,6 +267,11 @@ class AgentWorkflow:
                 "The verification model returned malformed structured output.",
                 exc,
                 TraceStage.VERIFICATION,
+                self._elapsed_ms(stage_started_at),
+            )
+        except ProviderError as exc:
+            return self._structured_failure(
+                state, "The verification provider was unavailable.", exc, TraceStage.VERIFICATION,
                 self._elapsed_ms(stage_started_at),
             )
         route = self._verification_route(state, result)
@@ -310,6 +340,37 @@ class AgentWorkflow:
                     stage_latency_ms=stage_latency_ms,
                 ),
             ),
+        }
+
+    def _initial_failure_result(self, run_id: str, started_at: float, message: str) -> dict:
+        event = RunTraceEvent(
+            stage=TraceStage.RETRIEVAL,
+            elapsed_ms=self._elapsed_ms(started_at),
+            stage_latency_ms=self._elapsed_ms(started_at),
+            attempt=0,
+            route="failure",
+            safe_error=message,
+        )
+        terminal = RunTraceEvent(
+            stage=TraceStage.TERMINAL,
+            elapsed_ms=self._elapsed_ms(started_at),
+            stage_latency_ms=0.0,
+            attempt=0,
+            terminal_outcome=TerminalOutcome.FAILURE,
+            safe_error=message,
+        )
+        return {
+            "draft_answer": message,
+            "verification_report": f"**Workflow Outcome:** FAILURE\n{message}",
+            "verification_retries": 0,
+            "terminal_outcome": TerminalOutcome.FAILURE.value,
+            "relevance_decision": None,
+            "verification_result": None,
+            "run_trace": RunTrace(
+                run_id=run_id, duration_ms=self._elapsed_ms(started_at), events=[event, terminal]
+            ).model_dump(mode="json"),
+            "citations": [],
+            "citation_report": "Citations unavailable: retrieval did not complete.",
         }
 
     def _mark_out_of_scope_step(self, state: AgentState) -> dict:
