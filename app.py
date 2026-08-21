@@ -8,6 +8,12 @@ from retriever.builder import RetrievalError, RetrieverBuilder
 from document_processor.file_handler import DocumentProcessingError
 from agents.workflow import AgentWorkflow
 from providers.factory import build_runtime_providers
+from product.operations import (
+    OperationInputError,
+    ResearchOperation,
+    gradio_operation_choices,
+    run_operation,
+)
 from config import constants
 from config.settings import settings
 from utils.logging import logger
@@ -88,8 +94,14 @@ def main():
     with gr.Blocks(theme=gr.themes.Citrus(), title="DocChat 🐥", css=css, js=js) as demo:
         gr.Markdown("## DocChat: powered by Docling 🐥 and LangGraph", elem_classes="subtitle")
         gr.Markdown("# How it works ✨:", elem_classes="title")
-        gr.Markdown("📤 Upload your document(s), enter your query then hit Submit 📝", elem_classes="text")
-        gr.Markdown("Or you can select one of the examples from the drop-down menu, select Load Example then hit Submit 📝", elem_classes="text")
+        gr.Markdown(
+            "📤 Upload document(s), choose a research operation, add a question or focus, then run it 📝",
+            elem_classes="text",
+        )
+        gr.Markdown(
+            "Or select an example, load it, choose an operation, then run it 📝",
+            elem_classes="text",
+        )
         gr.Markdown("⚠️ **Note:** DocChat only accepts documents in these formats: '.pdf', '.docx', '.txt', '.md'", elem_classes="text")
 
         # 2) Maintain the session state for retrieving doc changes
@@ -112,9 +124,18 @@ def main():
 
                 # Standard input components
                 files = gr.Files(label="📄 Upload Documents", file_types=constants.ALLOWED_TYPES)
-                question = gr.Textbox(label="❓ Question", lines=3)
+                operation = gr.Dropdown(
+                    label="🧭 Research Operation",
+                    choices=gradio_operation_choices(),
+                    value=ResearchOperation.ASK.value,
+                )
+                question = gr.Textbox(
+                    label="❓ Question or Focus",
+                    lines=3,
+                    placeholder="Ask a question, or add an optional focus for most study operations.",
+                )
 
-                submit_btn = gr.Button("Submit 🚀")
+                submit_btn = gr.Button("Run Research Operation 🚀")
                 
             with gr.Column():
                 answer_output = gr.Textbox(label="🐥 Answer", interactive=False)
@@ -157,13 +178,13 @@ def main():
         )
 
         # 5) Standard flow for question submission
-        def process_question(question_text: str, uploaded_files: List, state: Dict):
-            """Handle questions with document caching."""
+        def process_question(
+            operation_value: str, question_text: str, uploaded_files: List, state: Dict
+        ):
+            """Handle a product operation with document caching and the existing workflow."""
             try:
-                if not question_text.strip():
-                    raise ValueError("❌ Question cannot be empty")
                 if not uploaded_files:
-                    raise ValueError("❌ No documents uploaded")
+                    raise OperationInputError("Upload at least one document.")
 
                 current_hashes = _get_file_hashes(uploaded_files)
                 
@@ -177,8 +198,10 @@ def main():
                         "retriever": retriever
                     })
                 
-                result = workflow.full_pipeline(
-                    question=question_text,
+                result = run_operation(
+                    operation_value=operation_value,
+                    user_text=question_text,
+                    workflow=workflow,
                     retriever=state["retriever"]
                 )
                 
@@ -189,8 +212,8 @@ def main():
                     state,
                 )
                     
-            except (DocumentProcessingError, RetrievalError) as exc:
-                logger.error("Controlled document or retrieval failure.")
+            except (DocumentProcessingError, OperationInputError, RetrievalError) as exc:
+                logger.error("Controlled document, operation, or retrieval failure.")
                 return f"❌ {exc}", "", "", state
             except Exception:
                 logger.error("Unexpected application failure.")
@@ -198,7 +221,7 @@ def main():
 
         submit_btn.click(
             fn=process_question,
-            inputs=[question, files, session_state],
+            inputs=[operation, question, files, session_state],
             outputs=[answer_output, verification_output, citations_output, session_state]
         )
 
