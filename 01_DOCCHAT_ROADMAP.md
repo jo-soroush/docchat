@@ -2,63 +2,77 @@
 
 ## Authority
 
-This roadmap formalizes the approved DocChat direction. Repository reality and verified evidence remain authoritative for implementation state. The IBM baseline must be preserved before extensions are introduced.
+This roadmap formalizes the approved DocChat direction. Repository reality and verified evidence remain authoritative for implementation state. IBM Skills Network code and history are preserved as provenance and a historical baseline, while the future application becomes independent of IBM runtime services.
 
 ## Project Principle
 
-Extend the original IBM Skills Network DocChat; do not reduce useful baseline capability for convenience.
+Preserve useful baseline capability, provenance, and learning evidence without retaining a vendor runtime dependency.
+
+## Target Architecture Decision
+
+```text
+DocChat Core → Provider Abstraction → Local / Cloud Providers
+```
+
+DocChat Core owns document processing, document/library metadata, BM25/vector/hybrid retrieval, workflow state/routing, verification contracts, and UI adapters. Provider implementations own chat/embedding invocation and provider-specific configuration. Ollama is the first local implementation. Future optional adapters may support OpenAI-compatible APIs, AWS/cloud-hosted models, and other providers without importing vendor SDKs into Core.
 
 ## V1 — Reliable Personal Research Assistant
 
 ### C01 — Baseline Preservation & Architecture Audit
-**Goal:** Run and document the real IBM baseline before changing it.
-**Add:** architecture map, dependency map, baseline test questions, known limitations, license/provenance record.
-**Exit Gate:** Original application runs and repository architecture is documented from evidence.
+**Goal:** Document the real IBM baseline, its reusable capabilities, its vendor coupling, and the approved independent target architecture.
+**Add:** architecture/dependency/coupling maps, baseline test questions, known limitations, license/provenance record, and migration-ready Card sequence.
+**Exit Gate:** Baseline architecture and blockers are evidenced; provenance is recorded; the next provider-migration Card is bounded and approved for human review.
 
-### C02 — Bounded Research / Verification Loop
+### C02 — Provider Boundary & Ollama Local Runtime
+**Goal:** Remove IBM runtime dependence by placing chat/embedding calls behind a provider boundary and implementing Ollama locally.
+**Keep:** document processing, Chroma/BM25/hybrid retrieval behavior, research/verification concepts, LangGraph workflow, and Gradio UI.
+**Add:** provider contracts, Ollama chat/embedding adapters, local configuration, deterministic provider fakes, migration tests, and removal of active Watsonx runtime imports.
+**Exit Gate:** The core application runs locally with Ollama and has no IBM credential, project, or runtime-service dependency.
+
+### C03 — Bounded Research / Verification Loop
 **Goal:** Guarantee termination of the existing correction loop.
 **Keep:** Research Agent, Verification Agent, re-research on verification failure.
 **Add:** retry counter/limit; VERIFIED, OUT_OF_SCOPE, RETRY_EXHAUSTED, FAILURE outcomes; deterministic routing; path tests.
 **Exit Gate:** No query can enter an unbounded research/verification loop.
 
-### C03 — Structured Agent Contracts
+### C04 — Structured Agent Contracts
 **Goal:** Replace fragile free-text parsing with typed schemas.
 **Add:** schemas for relevance, research result, verification result, unsupported claims, contradictions, correction feedback, terminal state.
 **Exit Gate:** Control flow no longer depends on parsing strings such as `Supported: NO`.
 
-### C04 — Source & Citation Grounding
+### C05 — Source & Citation Grounding
 **Goal:** Make important factual claims traceable.
 **Add:** document/chunk identity, page/section metadata where available, citations, claim-to-source mapping, graceful citation fallback.
 **Exit Gate:** Users can inspect where important claims came from.
 
-### C05 — Retrieval Quality Evaluation
+### C06 — Retrieval Quality Evaluation
 **Goal:** Measure retrieval quality.
 **Keep:** BM25, vector search, hybrid ensemble.
 **Add:** fixed evaluation documents, question→passage fixtures, Recall@K/hit-rate checks, retriever comparisons, multi-document and out-of-scope tests.
 **Exit Gate:** Retrieval quality is measured, not assumed.
 
-### C06 — Answer & Verification Evaluation Suite
+### C07 — Answer & Verification Evaluation Suite
 **Goal:** Measure support, hallucination, relevance, and correction.
 **Add:** answerable, partial, out-of-scope, numerical-error, unsupported-claim, contradiction, multi-chunk, multi-document, correction-success, retry-exhaustion cases.
 **Exit Gate:** A repeatable suite detects regressions in retrieval and grounded answer quality.
 
-### C07 — Observability & Run Trace
+### C08 — Observability & Run Trace
 **Goal:** Make each query diagnosable.
 **Add:** run ID, retrieved IDs, relevance decision, attempt number, verification result, route, latency, terminal result, safe errors.
 **Exit Gate:** Poor results can be localized to retrieval, relevance, generation, verification, routing, or infrastructure.
 
-### C08 — Robust Error Handling & Fallbacks
+### C09 — Robust Error Handling & Fallbacks
 **Goal:** Convert known failures into controlled outcomes.
 **Handle:** parse/empty/unsupported files, embedding/retriever failures, model timeout, malformed structured output, zero docs, verification/cache failures, partial multi-file processing.
 **Exit Gate:** Known failures produce explicit safe outcomes and tests.
 
-### C09 — Research Assistant Product Experience
+### C10 — Research Assistant Product Experience
 **Goal:** Keep Gradio while improving personal research/study usefulness.
 **Keep:** upload, question, answer, verification report, session reuse.
 **Add:** Ask, Summarize, Key Points, Compare Sources, Explain Concept, Generate Study Questions.
 **Exit Gate:** Users can study books/papers through the same verified backend workflow.
 
-### C10 — V1 Closure & Portfolio Evidence
+### C11 — V1 Closure & Portfolio Evidence
 **Goal:** Close V1 as a reproducible final project.
 **Add:** architecture diagram, setup guide, provenance/license, design decisions, baseline-vs-extension record, evaluation results, limitations, verified demos, learning notes.
 **Exit Gate:** A new developer can clone, run, test, understand, and explain the system.
@@ -130,7 +144,7 @@ V2 adds capabilities; it does not replace V1 foundations.
 
 ## Cross-Project Provider Principle
 
-Prefer local-first development while preserving replaceable model/provider boundaries. Ollama may be the preferred local runtime, but provider portability must be introduced only when justified by repository evidence and an approved Card. Target portability includes local models, cloud APIs, and cloud/AWS-hosted endpoints.
+Ollama is the required first local provider. Cloud/API providers are optional and must be introduced only by approved Cards behind the V1-C02 provider boundary. V2 source routing/tooling, persistent research libraries, evaluation, observability, security, and AWS/cloud deployment readiness remain required longer-term capabilities.
 
 ## Non-Goals
 

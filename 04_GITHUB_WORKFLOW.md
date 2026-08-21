@@ -14,8 +14,8 @@ Prefer one branch per Card:
 
 ```text
 codex/v1-c01-baseline-audit
-codex/v1-c02-bounded-loop
-codex/v1-c03-structured-contracts
+codex/v1-c02-provider-ollama
+codex/v1-c03-bounded-loop
 codex/v2-c03-react-research
 ```
 
@@ -42,7 +42,7 @@ Do not create a commit for every trivial edit.
 Prefer clear Conventional Commit-style messages:
 
 ```text
-feat: add bounded verification retry state
+feat: add Ollama provider adapter
 fix: preserve out-of-scope terminal routing
 test: add retry exhaustion coverage
 docs: record V1-C02 learning evidence

@@ -2,7 +2,7 @@
 
 ## DocChat — Mandatory AI Coding Instructions
 
-This repository extends the original IBM Skills Network DocChat into a reliable, testable, source-grounded Personal AI Research Assistant and later an Agentic Research Intelligence System.
+This repository preserves the IBM Skills Network DocChat as provenance and a historical baseline while evolving into an independent, reliable, source-grounded Personal AI Research Assistant and later an Agentic Research Intelligence System.
 
 This file protects repository truth, IBM baseline capabilities, Card order, architectural boundaries, validation discipline, evidence quality, and learning value.
 
@@ -23,9 +23,9 @@ Verified evidence > completion claims.
 
 If authorities conflict, stop and report the conflict before modifying files.
 
-## 2. IBM Baseline Preservation
+## 2. Historical Baseline Preservation
 
-V1 extends the IBM DocChat baseline; it does not simplify it by removing useful capabilities.
+V1 preserves useful IBM DocChat capabilities, not IBM runtime dependency. Git history, upstream attribution, and verified baseline findings remain intact; the active application must become vendor-neutral through approved Cards.
 
 Preserve unless an approved Card explicitly changes them:
 - PDF/DOCX/TXT/MD upload;
@@ -33,7 +33,7 @@ Preserve unless an approved Card explicitly changes them:
 - Markdown-based chunking;
 - validation, hashing, caching, and deduplication;
 - ChromaDB vector storage;
-- Watsonx embeddings until provider work is explicitly approved;
+- local-first, provider-neutral model and embedding boundaries after V1-C02;
 - BM25, vector, and hybrid retrieval;
 - relevance checking;
 - Research Agent;
@@ -134,12 +134,18 @@ Do not implement during the initial map.
 
 ### Model/provider portability
 
-Prefer local-first development while preserving replaceable provider boundaries when provider work is in scope.
+The approved target architecture is:
+
+```text
+DocChat Core → Provider Abstraction → Local / Cloud Providers
+```
+
+Ollama is the first local implementation. Cloud/API providers (including OpenAI-compatible and AWS-hosted services) remain optional implementations behind the same boundary. Core document processing, retrieval, workflow, verification, and UI must not import a vendor SDK.
 
 Target direction:
 Agent/workflow → model-provider interface → Ollama/local model OR cloud API OR cloud-hosted/AWS-compatible endpoint.
 
-Do not hard-code DocChat business/workflow logic to one model vendor. Do not prematurely refactor the IBM provider boundary before repository evidence and an approved Card justify it.
+V1-C02 is the approved provider-migration Card. Do not hard-code DocChat business/workflow logic to one model vendor, and do not add a concrete cloud provider until an approved later Card requires it.
 
 Never hard-code secrets. Use environment/configuration boundaries and keep credentials out of Git.
 

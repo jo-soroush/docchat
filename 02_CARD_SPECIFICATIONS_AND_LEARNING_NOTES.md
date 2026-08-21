@@ -38,22 +38,22 @@ Sections 13–14 are filled only from actual implementation/evidence.
 Baseline Preservation & Architecture Audit
 
 ### 2. Engineering Goal
-Run the selected IBM DocChat baseline successfully and document its actual end-to-end architecture before custom implementation.
+Document the selected IBM DocChat baseline, reusable capabilities, vendor coupling, and the approved independent target architecture before migration implementation.
 
 ### 3. Learning Goal
-Understand how the IBM system really connects document ingestion, retrieval, agents, LangGraph routing, and UI rather than relying on lab prose or assumptions.
+Understand which baseline responsibilities are reusable core behavior and which are IBM-specific provider coupling.
 
 ### 4. Why It Exists
-All later Cards depend on knowing repository reality and preserving useful baseline behavior.
+All later Cards depend on knowing repository reality, preserving useful behavior, and separating historical provenance from runtime dependency.
 
 ### 5. Architecture Concept
-Evidence-first architecture discovery and baseline preservation.
+Evidence-first architecture discovery, coupling analysis, and migration planning.
 
 ### 6. Current System Before Card
 Selected baseline is the IBM final-lab implementation on the project baseline branch. Custom DocChat extensions have not started. Exact runtime behavior must be verified from repository evidence.
 
 ### 7. Design Decision
-Do not redesign or implement extensions during this Card. Inspect, run, map, test baseline behavior, and record provenance/limitations.
+Do not migrate providers during this Card. Inspect, map, test where feasible, record provenance/limitations, and establish the authoritative `DocChat Core → Provider Abstraction → Local / Cloud Providers` target for V1-C02.
 
 ### 8. Implementation Scope
 - verify Git/baseline state;
@@ -66,10 +66,12 @@ Do not redesign or implement extensions during this Card. Inspect, run, map, tes
 - create architecture/dependency/preservation/risk maps;
 - record provenance/license concerns;
 - establish baseline test questions and known limitations.
+- classify reusable core, configuration-only coupling, and IBM architectural coupling;
+- record the project-owner local-first/Ollama architecture decision and revised Card order.
 
 ### 9. Out of Scope
 - no custom feature implementation;
-- no provider abstraction rewrite;
+- no provider abstraction or Ollama implementation;
 - no UI rewrite;
 - no new agents;
 - no V2 behavior;
@@ -82,7 +84,7 @@ None beyond a valid repository/runtime environment and selected IBM baseline.
 Run existing tests where feasible, execute baseline application/critical paths, record actual failures/blockers, and establish reproducible baseline checks.
 
 ### 12. Exit Gate
-Original application runs or blockers are precisely evidenced; repository architecture is documented from evidence; IBM capabilities and provenance are recorded; readiness/blockers for V1-C02 are known.
+Baseline runtime blockers are precisely evidenced; repository architecture, provenance, and vendor-coupling map are documented; the independent target architecture and bounded V1-C02 migration contract are approved and ready for human review.
 
 ### 13. What We Learned
 `Pending — fill only after audit evidence exists.`
@@ -92,23 +94,39 @@ Original application runs or blockers are precisely evidenced; repository archit
 
 ---
 
-## V1-C02 — Bounded Research / Verification Loop
+## V1-C02 — Provider Boundary & Ollama Local Runtime
+1. **Title:** Provider Boundary & Ollama Local Runtime
+2. **Engineering Goal:** Make the active DocChat runtime independent of IBM Watsonx by introducing a narrow provider boundary and its first local Ollama implementation.
+3. **Learning Goal:** Learn how to isolate vendor-specific inference/embedding behavior while preserving RAG and workflow ownership.
+4. **Why It Exists:** The historical baseline cannot run independently because chat and embeddings are coupled to IBM credentials, project IDs, SDKs, and hosted models.
+5. **Architecture Concept:** `DocChat Core → Provider Abstraction → Local / Cloud Providers`.
+6. **Current System Before Card:** V1-C01 records direct Watsonx use in three agents and the retriever builder; document processing, retrieval composition, workflow, and UI are reusable.
+7. **Design Decision:** Ollama is the first local provider. Core imports no Watsonx/OpenAI/AWS SDK. Future cloud providers implement the same explicit contracts.
+8. **Implementation Scope:** chat and embedding contracts; Ollama adapters; local configuration; deterministic fakes; migration of current Watsonx call sites; removal of active IBM runtime dependencies; parity/regression tests for retained behavior.
+9. **Out of Scope:** a generic provider marketplace, concrete cloud adapters, V2 tools/source routing, workflow redesign, and feature expansion.
+10. **Dependencies:** V1-C01 closed with this architecture decision.
+11. **Tests / Evaluation:** contract tests with fakes; Ollama availability/failure tests; local document→retrieval→workflow smoke path; regression tests for retained core behavior.
+12. **Exit Gate:** A local Ollama configuration runs the DocChat core path without IBM credentials, IBM projects, IBM SDK imports, or IBM runtime services.
+13. **What We Learned:** Pending.
+14. **Completion Evidence:** Pending.
+
+## V1-C03 — Bounded Research / Verification Loop
 1. **Title:** Bounded Research / Verification Loop
 2. **Engineering Goal:** Guarantee termination of the existing correction loop.
 3. **Learning Goal:** Understand deterministic termination around probabilistic agents.
 4. **Why It Exists:** Unbounded agent loops are unsafe and operationally unreliable.
 5. **Architecture Concept:** Explicit retry state + deterministic terminal routing.
-6. **Current System Before Card:** Populate from V1-C01 evidence.
+6. **Current System Before Card:** Populate from V1-C01/V1-C02 evidence.
 7. **Design Decision:** Preserve Research + Verification + re-research; add bounded control.
 8. **Implementation Scope:** retry counter/limit, explicit terminal outcomes, deterministic routes, path tests.
 9. **Out of Scope:** broader schema redesign except minimal boundary required; V2 Reflexion/ReAct.
-10. **Dependencies:** V1-C01 closed.
+10. **Dependencies:** V1-C02.
 11. **Tests / Evaluation:** all terminal paths, retry exhaustion, out-of-scope, success/failure.
 12. **Exit Gate:** No query can enter an unbounded research/verification loop.
 13. **What We Learned:** Pending.
 14. **Completion Evidence:** Pending.
 
-## V1-C03 — Structured Agent Contracts
+## V1-C04 — Structured Agent Contracts
 1. **Title:** Structured Agent Contracts
 2. **Engineering Goal:** Replace fragile free-text control parsing with typed schemas.
 3. **Learning Goal:** Understand explicit contracts between agent/workflow stages.
@@ -118,13 +136,13 @@ Original application runs or blockers are precisely evidenced; repository archit
 7. **Design Decision:** Introduce schemas at existing ownership boundaries.
 8. **Implementation Scope:** relevance, research, verification, unsupported claims, contradictions, correction feedback, terminal state.
 9. **Out of Scope:** new specialist agents or V2 tool orchestration.
-10. **Dependencies:** V1-C02.
+10. **Dependencies:** V1-C03.
 11. **Tests / Evaluation:** valid/malformed outputs, schema invariants, routing integration.
 12. **Exit Gate:** Control flow no longer depends on parsing strings such as `Supported: NO`.
 13. **What We Learned:** Pending.
 14. **Completion Evidence:** Pending.
 
-## V1-C04 — Source & Citation Grounding
+## V1-C05 — Source & Citation Grounding
 1. **Title:** Source & Citation Grounding
 2. **Engineering Goal:** Make important claims traceable to source evidence.
 3. **Learning Goal:** Understand provenance across ingestion, retrieval, generation, and verification.
@@ -134,13 +152,13 @@ Original application runs or blockers are precisely evidenced; repository archit
 7. **Design Decision:** Extend metadata/contracts without breaking retrieval.
 8. **Implementation Scope:** document/chunk IDs, page/section metadata, citations, claim-source mapping, graceful fallback.
 9. **Out of Scope:** V2 web provenance/freshness system.
-10. **Dependencies:** V1-C03.
+10. **Dependencies:** V1-C04.
 11. **Tests / Evaluation:** metadata propagation, citation mapping, unavailable-citation behavior.
 12. **Exit Gate:** Users can inspect where important claims came from.
 13. **What We Learned:** Pending.
 14. **Completion Evidence:** Pending.
 
-## V1-C05 — Retrieval Quality Evaluation
+## V1-C06 — Retrieval Quality Evaluation
 1. **Title:** Retrieval Quality Evaluation
 2. **Engineering Goal:** Quantitatively evaluate retrieval.
 3. **Learning Goal:** Learn why retrieval quality must be measured separately from generation.
@@ -150,13 +168,13 @@ Original application runs or blockers are precisely evidenced; repository archit
 7. **Design Decision:** Preserve BM25/vector/hybrid and compare them.
 8. **Implementation Scope:** fixed docs, question→passage fixtures, Recall@K/hit-rate, retriever comparisons, multi-doc/OOS cases.
 9. **Out of Scope:** V2 production monitoring.
-10. **Dependencies:** V1-C04.
+10. **Dependencies:** V1-C05.
 11. **Tests / Evaluation:** deterministic retrieval evaluation suite.
 12. **Exit Gate:** Retrieval quality is measured, not assumed.
 13. **What We Learned:** Pending.
 14. **Completion Evidence:** Pending.
 
-## V1-C06 — Answer & Verification Evaluation Suite
+## V1-C07 — Answer & Verification Evaluation Suite
 1. **Title:** Answer & Verification Evaluation Suite
 2. **Engineering Goal:** Detect regressions in grounded answer/verification behavior.
 3. **Learning Goal:** Separate retrieval success from answer support and verification quality.
@@ -166,13 +184,13 @@ Original application runs or blockers are precisely evidenced; repository archit
 7. **Design Decision:** Evaluate representative behavior, including failure paths.
 8. **Implementation Scope:** answerable/partial/OOS/numerical/unsupported/contradiction/multi-chunk/multi-doc/correction/retry cases.
 9. **Out of Scope:** large-scale V2 monitoring.
-10. **Dependencies:** V1-C05.
+10. **Dependencies:** V1-C06.
 11. **Tests / Evaluation:** repeatable answer + verification suite.
 12. **Exit Gate:** Suite detects regressions in retrieval and grounded answer quality.
 13. **What We Learned:** Pending.
 14. **Completion Evidence:** Pending.
 
-## V1-C07 — Observability & Run Trace
+## V1-C08 — Observability & Run Trace
 1. **Title:** Observability & Run Trace
 2. **Engineering Goal:** Make each query diagnosable.
 3. **Learning Goal:** Understand observability across agentic workflows.
@@ -182,13 +200,13 @@ Original application runs or blockers are precisely evidenced; repository archit
 7. **Design Decision:** Trace decisions/evidence without leaking sensitive content.
 8. **Implementation Scope:** run ID, retrieved IDs, decisions, attempts, verification, route, latency, terminal result, safe errors.
 9. **Out of Scope:** full production telemetry platform.
-10. **Dependencies:** V1-C06.
+10. **Dependencies:** V1-C07.
 11. **Tests / Evaluation:** trace completeness and safe-error behavior.
 12. **Exit Gate:** Poor results can be localized to the responsible stage.
 13. **What We Learned:** Pending.
 14. **Completion Evidence:** Pending.
 
-## V1-C08 — Robust Error Handling & Fallbacks
+## V1-C09 — Robust Error Handling & Fallbacks
 1. **Title:** Robust Error Handling & Fallbacks
 2. **Engineering Goal:** Convert known failures into controlled outcomes.
 3. **Learning Goal:** Design failure contracts around external/model/retrieval dependencies.
@@ -198,13 +216,13 @@ Original application runs or blockers are precisely evidenced; repository archit
 7. **Design Decision:** Handle known failures at their owning boundary.
 8. **Implementation Scope:** parse/file/retriever/embedding/model/malformed-output/zero-doc/verification/cache/partial-file failures.
 9. **Out of Scope:** unrelated infrastructure resilience.
-10. **Dependencies:** V1-C07.
+10. **Dependencies:** V1-C08.
 11. **Tests / Evaluation:** focused failure injection and controlled outcomes.
 12. **Exit Gate:** Known failures produce explicit safe outcomes and tests.
 13. **What We Learned:** Pending.
 14. **Completion Evidence:** Pending.
 
-## V1-C09 — Research Assistant Product Experience
+## V1-C10 — Research Assistant Product Experience
 1. **Title:** Research Assistant Product Experience
 2. **Engineering Goal:** Improve study/research operations while preserving the verified backend.
 3. **Learning Goal:** Keep UI/product concerns separate from core AI architecture.
@@ -214,13 +232,13 @@ Original application runs or blockers are precisely evidenced; repository archit
 7. **Design Decision:** Keep Gradio baseline for V1; add operations without moving core logic into UI.
 8. **Implementation Scope:** Ask, Summarize, Key Points, Compare Sources, Explain Concept, Study Questions.
 9. **Out of Scope:** permanent production UI decision.
-10. **Dependencies:** V1-C08.
+10. **Dependencies:** V1-C09.
 11. **Tests / Evaluation:** operation routing and backend behavior preservation.
 12. **Exit Gate:** Users can study books/papers through the same verified backend.
 13. **What We Learned:** Pending.
 14. **Completion Evidence:** Pending.
 
-## V1-C10 — V1 Closure & Portfolio Evidence
+## V1-C11 — V1 Closure & Portfolio Evidence
 1. **Title:** V1 Closure & Portfolio Evidence
 2. **Engineering Goal:** Make V1 reproducible, explainable, and demonstrable.
 3. **Learning Goal:** Practice professional project closure and evidence communication.
@@ -230,7 +248,7 @@ Original application runs or blockers are precisely evidenced; repository archit
 7. **Design Decision:** Close only from verified repository state.
 8. **Implementation Scope:** architecture diagram, setup, provenance, decisions, baseline-vs-extension, evaluations, limitations, demos, learning notes.
 9. **Out of Scope:** V2 implementation.
-10. **Dependencies:** V1-C09 and all V1 Exit Gates.
+10. **Dependencies:** V1-C10 and all V1 Exit Gates.
 11. **Tests / Evaluation:** clean setup/run/test reproduction and evidence review.
 12. **Exit Gate:** A new developer can clone, run, test, understand, and explain the system.
 13. **What We Learned:** Pending.
