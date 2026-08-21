@@ -819,8 +819,83 @@ V1-C09 can use the safe C08 trace to prove controlled handling of known parser, 
 V1-C10 can add study/research product operations over these controlled backend outcomes without embedding workflow or error logic in the Gradio UI.
 
 ## V1-C10 — Research Assistant Product Experience
-**Status:** BLOCKED.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; V1-C11 has not started.
+
+### Contract Map / Risk Map
+
+- **Baseline path:** Gradio accepted only a free-form question and uploaded files, reused its session retriever, then called `AgentWorkflow.full_pipeline()`. The workflow owned typed relevance/research/verification state, bounded retry routing, C05 citations, C08 safe traces, and C09 safe failures.
+- **C10 product boundary:** `product/operations.py` owns only deterministic operation selection and request construction. `app.py` owns Gradio controls and session reuse. Neither owns providers, retrieval, agents, prompts, citations, terminal routing, retry state, or traces.
+- **Risks controlled:** an operation must not bypass the workflow, mutate a backend result, convert a product label into control state, or lose citations/retry/trace output. Unknown or incomplete operation input must fail with a safe user message before backend execution.
+
+### Architecture Before → After
+
+```text
+Before
+Gradio free-form question → existing verified workflow → answer/report/citations
+
+After
+Gradio operation + question/focus → deterministic product-operation adapter
+    → same existing verified workflow → unchanged answer/report/citations
+```
+
+All six operations become ordinary questions for the existing backend:
+
+- **Ask** preserves the user's question.
+- **Summarize**, **Key Points**, **Compare Sources**, and **Generate Study Questions** work with an optional focus.
+- **Explain Concept** requires the concept as its focus.
+
+### Implementation / Verified Behavior
+
+- `product/operations.py`: adds `ResearchOperation`, stable Gradio labels, safe `OperationInputError`, deterministic question construction, and `run_operation()`. The dispatcher invokes `workflow.full_pipeline()` exactly once and returns its result unchanged.
+- `app.py`: adds a Research Operation selector while retaining upload, examples, session-level retriever reuse, answer, verification report, and Sources & Citations outputs. It uses `run_operation()` rather than adding generation/retrieval logic to the UI.
+- `test/test_product_operations.py`: proves all six required operations are present, generated questions are deterministic, invalid/missing input is safe, and dispatch preserves terminal outcome, citations, retry count, and safe trace result fields.
+
+### Baseline → Final Evidence
+
+- **Baseline:** C09 deterministic suite PASS — 54/54; no product-operation contract or UI selector existed.
+- **Final:** C10 focused tests PASS — 5/5; full deterministic suite PASS — 59/59. The operation adapter preserves the backend result object, so C03 retry limits, C04 typed routing, C05 citations, C08 traces, and C09 failures remain backend-owned.
+- **Gradio:** local HTTP `/config` validation on port `7862` found the Research Operation, Compare Sources, and Generate Study Questions controls; the validation process was shut down cleanly.
+
+### Tests / Validation
+
+- `venv/bin/python -m unittest discover -s test -p 'test_product_operations.py' -v`: PASS — 5/5 C10 focused tests.
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 59/59 deterministic tests: C02 10, C03 8, C04 6, C05 6, C06 6, C07 6, C08 4, C09 8, C10 5.
+- `venv/bin/python -m evaluation.run_retrieval_evaluation`: PASS — C06 BM25/vector/hybrid each retained Hit Rate@3 `1.00` and mean Recall@3 `1.00` over 4 scoreable cases.
+- `venv/bin/python -m evaluation.run_answer_verification_evaluation`: PASS — C07 answer/verification evaluation retained 10/10 passed cases.
+- `venv/bin/pip check`: PASS — no broken requirements found.
+- `venv/bin/python -m compileall -q agents app.py config document_processor evaluation product providers retriever test utils`: PASS.
+- Active IBM/Watsonx/OpenAI runtime import scan: PASS — no production import found.
+- `git diff --check`: PASS. Generated `:memory:.ses` was removed; no `.env`, credentials, model files, temporary Chroma data, or unrelated artifacts remain.
+
+### Learning Record
+
+**What we built / why:** C10 turns a single free-form research box into six study-oriented operations without creating a second AI system. A researcher can ask, summarize, extract key points, compare sources, explain a concept, or generate study questions using the same grounded document workflow.
+
+**Professional lesson:** A product feature should compose proven backend capabilities rather than duplicate them. The operation adapter is deterministic and thin: it expresses user intent, then delegates. This preserves one source of truth for citations, verification, retry safety, observability, and failure handling.
+
+**Student takeaway:** UI labels are not agent control flow. Treat a product action as a small validated request at the edge of the system, then send it through the tested RAG workflow. That makes the application easier to extend and much less likely to develop parallel, inconsistent behavior.
+
+### Exit Gate Proof
+
+- All six Card-required study operations are exposed through the Gradio product layer and tested.
+- Each supported operation routes through the same `AgentWorkflow.full_pipeline()` backend rather than adding UI-side retrieval or generation.
+- Focused tests prove the dispatcher returns the unchanged backend result, preserving citations, retry state, terminal outcome, and safe trace fields.
+- C02–C09 regressions PASS — 54/54; C06/C07 evaluation baselines remain unchanged; Gradio HTTP configuration exposes the new operations.
+- No provider, model, retrieval, workflow, agent-prompt-template, cloud, or V1-C11 redesign was introduced.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused C10: PASS — 5/5.
+- C02–C09 regressions: PASS — 54/54; full suite 59/59.
+- Card acceptance: PASS — deterministic operation routing, backend-result preservation, C06/C07 runner preservation, Gradio HTTP validation, dependency/static checks, and vendor-runtime scan all passed.
+- Diff/state/artifact/secrets review: PASS — only intended C10 product adapter, Gradio UI, focused test, and evidence changes remain; `git diff --check` passed; generated artifacts were removed.
+- Human approval is required before commit/delivery and before V1-C11: YES.
+
+### What V1-C11 Builds On Next
+
+V1-C11 can document and package the now complete V1 system: provenance, local setup, architecture, evaluation results, limitations, and a reproducible user-facing demonstration without changing the C10 product/backend boundary.
 
 ## V1-C11 — V1 Closure & Portfolio Evidence
 **Status:** BLOCKED.
