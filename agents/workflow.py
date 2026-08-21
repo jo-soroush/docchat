@@ -111,11 +111,21 @@ class AgentWorkflow:
             structured_error="",
         )
         final_state = self.compiled_workflow.invoke(initial_state)
+        relevance_result = final_state["relevance_result"]
+        verification_result = final_state["verification_result"]
         return {
             "draft_answer": final_state["draft_answer"],
             "verification_report": final_state["verification_report"],
             "verification_retries": final_state["verification_retries"],
             "terminal_outcome": final_state["terminal_outcome"].value,
+            # Additive structured values for deterministic evaluation consumers.
+            # UI output remains the existing human-readable answer/report/citations.
+            "relevance_decision": (
+                relevance_result.decision.value if relevance_result is not None else None
+            ),
+            "verification_result": (
+                verification_result.model_dump() if verification_result is not None else None
+            ),
             "citations": [citation.model_dump() for citation in final_state["citations"]],
             "citation_report": format_citation_report(final_state["citations"]),
         }

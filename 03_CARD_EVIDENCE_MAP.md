@@ -581,8 +581,95 @@ After:  golden question → expected C05 chunk IDs → mode-specific retrieved I
 - Human approval required before V1-C07: YES.
 
 ## V1-C07 — Answer & Verification Evaluation Suite
-**Status:** BLOCKED.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; V1-C08 has not started.
+
+### Contract Map / Risk Map
+
+- **Entry and ownership:** C06 owns retrieval-only comparison of BM25/vector/hybrid results against stable C05 `chunk_id` evidence. The C07 runner invokes that unchanged `K=3` measurement first, then drives the existing `AgentWorkflow.full_pipeline()` with a deterministic `ChatProvider` fake and static retrieved documents for downstream behavior.
+- **Machine contracts:** `RelevanceResult.decision` controls entry to research; `ResearchResult` carries the answer and model-proposed claim IDs; C05 resolves those IDs to `SourceCitation`; `VerificationResult.supported`/`relevant`, `verification_retries`, and `TerminalOutcome` control the bounded C03 graph. `draft_answer`, relevance explanation, verification report, and citation report remain human-readable outputs, not evaluation control signals.
+- **Evaluation boundary:** C07 reports retrieval preconditions, expected final answer, resolved citation IDs, final typed verification support decision, and terminal/retry routing separately. An answer can have retrieved evidence yet still fail support/verification; a citation can resolve yet not prove that the verifier should accept the answer.
+- **Risk controls:** fixture validation rejects duplicate cases, missing stable chunk IDs, incomplete category coverage, and unknown expected evidence. Out-of-scope is a terminal behavior with no retrieval/citation denominator. The retry-exhaustion fixture proves that repeated failed verification preserves the last draft and terminates within C03's existing budget. No report text is parsed.
+
+### Implementation / Evaluation Architecture
+
+```text
+C05-stable fixture document/chunk IDs + fixed typed model responses
+→ static retrieved evidence + existing AgentWorkflow
+→ RelevanceResult → ResearchResult/SourceCitation → VerificationResult
+→ existing C03 typed routing and terminal outcome
+→ separate retrieval / answer / citation / verification / routing measurements
+```
+
+- `agents/workflow.py`: `full_pipeline()` now additively returns final `relevance_decision` and serialized `verification_result` for deterministic evaluation consumers. Gradio continues to consume its existing answer, verification-report, and citation-report fields.
+- `evaluation/answer_verification_fixtures.py`: one deterministic fake chat provider, static retriever, stable source metadata, and the exact ten C07 categories: answerable, partial, out-of-scope, numerical error, unsupported claim, contradiction, multi-chunk, multi-document, correction success, and retry exhaustion.
+- `evaluation/answer_verification_metrics.py`: validates fixtures and produces separate per-case and aggregate measurements without parsing human-readable reports.
+- `evaluation/run_answer_verification_evaluation.py`: reproducible local runner that returns C06 production-retriever metrics and C07 workflow metrics in separate sections.
+- `test/test_answer_verification_evaluation.py`: six focused tests covering category completeness, boundary-separated metrics, OOS handling, correction/exhaustion routing, missing-evidence rejection, and repeatability.
+
+### Baseline Measurement
+
+Run: `venv/bin/python -m evaluation.run_answer_verification_evaluation` (returns separate `retrieval` and `answer_verification` sections)
+
+| Boundary | Scoreable cases | Result |
+| --- | ---: | --- |
+| Retrieval precondition (expected stable chunks present) | 9 | 9/9 |
+| Final golden answer | 10 | 10/10 |
+| Citation grounding (expected local IDs resolved) | 9 | 9/9 |
+| Final typed verification support decision | 9 | 9/9 |
+| Typed terminal/retry routing | 10 | 10/10 |
+
+The out-of-scope geography case deliberately has no gold source, does not enter research/verification, and reaches `OUT_OF_SCOPE` with zero retries. The retry-exhaustion case deliberately ends with `supported=false`, preserves its last draft, and reaches `RETRY_EXHAUSTED` after two configured retries. These are expected safe behaviors, not answer-quality successes.
+
+### Tests / Validation
+
+- `venv/bin/python -m unittest discover -s test -p 'test_answer_verification_evaluation.py' -v`: PASS — 6 focused C07 tests.
+- `venv/bin/python -m evaluation.run_answer_verification_evaluation`: PASS — all 10 golden C07 cases plus the unchanged C06 BM25/vector/hybrid evaluation; the runner keeps the two measurement layers in separate JSON sections.
+- `venv/bin/python -m evaluation.run_retrieval_evaluation`: PASS — C06 BM25/vector/hybrid each retained 4 scored cases, 1 OOS case, Hit Rate@3 `1.00`, and mean Recall@3 `1.00`; no retrieval behavior was tuned.
+- C02–C06 focused regressions: PASS — C02 provider/configuration 10/10, C03 bounded workflow 8/8, C04 typed contracts 6/6, C05 citation grounding 6/6, C06 retrieval evaluation 6/6.
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 42 deterministic tests total (including C07 6/6).
+- `venv/bin/python -m pip check`: PASS — `No broken requirements found.`
+- `venv/bin/python -m compileall -q agents config document_processor evaluation providers retriever app.py`: PASS.
+- `venv/bin/python test/test1.py`: PASS — retained Docling diagnostic exited `0`; existing malformed PNG-as-PDF handling printed its expected parser error. Non-blocking local Docling/Hugging Face cache and no-accelerator warnings were observed.
+- Active runtime-coupling scan: PASS — no active IBM/Watsonx/OpenAI SDK imports in production Python; the only match is C02's negative import-scan test tuple.
+- Gradio startup was not rerun because C07 does not change or depend on the UI/startup boundary; C05's validated Sources & Citations UI and C02/C04 workflow/UI contracts remain covered by regression tests.
+
+### Problem Found and Resolved
+
+The first evaluator draft incorrectly treated matching terminal outcome/retry count as the verification metric. That would conflate C03 routing correctness with whether the final typed verifier returned the expected `supported` boolean. The evaluator was corrected before recording the baseline: it now reports typed verification decision and routing as separate columns. No workflow policy, prompt, retriever, or model setting changed.
+
+### Learning Record
+
+**What we built / why:** A small golden suite now demonstrates that DocChat's deterministic workflow behaves correctly across supported, partial, out-of-scope, corrected, contradicted, and exhausted-retry paths. This turns “the agents seem to work” into repeatable evidence that can catch behavioral regressions.
+
+**Architecture before → after:** Before C07, C06 could show whether expected chunks were retrieved, and C03–C05 had unit tests for individual routes/contracts. After C07, a single deterministic suite passes stable evidence through the actual typed workflow and separately observes retrieval prerequisites, output answer, citation resolution, typed verifier decision, and terminal route. The provider abstraction, Ollama implementation, hybrid retrieval, bounded loop, Pydantic contracts, provenance, and Gradio adapter are unchanged.
+
+**Professional engineering lesson:** Evaluation needs explicit quality layers. Retrieval hit rate cannot prove a generated sentence is grounded; a displayed citation cannot prove the claim is supported; and a correct terminal route cannot prove the verifier made the expected judgment. Measure each boundary from its typed data instead of reverse-engineering display strings.
+
+**Student takeaway:** Golden tests for agentic systems are controlled scenarios, not a claim that a real model is universally accurate. A good fixture names the evidence, fixed model response, expected final answer, verification decision, and retry outcome. If any contract changes, the fixture should fail in the layer that owns the regression.
+
+### Exit Gate Proof
+
+- **Repeatable suite:** version-controlled fixtures and deterministic fake providers make two consecutive runner calls identical; focused repeatability test passes.
+- **Detects retrieval regressions:** the complete C07 runner executes C06's actual BM25/vector/hybrid evaluation over stable `chunk_id` fixtures; downstream fixtures also validate expected retrieved-evidence preconditions, with missing/unknown expected evidence rejected instead of silently scoring green.
+- **Detects grounded-answer regressions:** exact final answer and resolved retrieved citation IDs are checked independently across answerable, partial, numerical, unsupported, contradiction, multi-chunk, and multi-document cases.
+- **Detects verification/correction regressions:** final typed `supported` decision, correction success, and C03 retry-exhaustion terminal state are checked without parsing verification prose.
+- **All required case classes represented:** 10/10 exact C07 categories are present and validated.
+- **Completed architecture preserved:** C02–C06 regressions and the full 42-test deterministic suite pass; C06 retrieval baseline remains unchanged.
+- **No future-Card leakage:** no real-model tuning, retrieval tuning, observability/run tracing, cloud provider, model download, or V1-C08 implementation was added.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused C07 tests/evaluation: PASS — 6/6 tests and 10/10 golden cases.
+- Relevant C02–C06 regressions: PASS — 36/36 tests; full deterministic suite is 42/42.
+- Configuration/dependency/static checks: PASS — `pip check`, compilation, active vendor-runtime scan, and retained Docling diagnostic.
+- Diff/state/artifact/secrets review: PASS — only intended C07 workflow-evaluation, fixture, metric, runner, test, and evidence changes remain; `git diff --check` passed; generated `:memory:.ses` and Python caches were removed; no `.env`, credentials, model files, or temporary Chroma data remain.
+- Human approval is required before commit/delivery, and before V1-C08: YES.
+
+### What V1-C08 Builds On Next
+
+V1-C08 can attach safe per-run trace data to the already explicit decisions and outcomes so a failed real query can be localized to retrieval, relevance, research, verification, routing, or infrastructure. It must not be started without separate approval.
 
 ## V1-C08 — Observability & Run Trace
 **Status:** BLOCKED.
