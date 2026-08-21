@@ -14,9 +14,11 @@ from .contracts import (
     RelevanceResult,
     ResearchResult,
     StructuredOutputError,
+    SourceCitation,
     TerminalOutcome,
     VerificationResult,
 )
+from .citations import format_citation_report
 from .relevance_checker import RelevanceChecker
 from .research_agent import ResearchAgent
 from .verification_agent import VerificationAgent
@@ -34,6 +36,7 @@ class AgentState(TypedDict):
     terminal_outcome: TerminalOutcome | None
     relevance_result: RelevanceResult | None
     research_result: ResearchResult | None
+    citations: list[SourceCitation]
     verification_result: VerificationResult | None
     structured_error: str
 
@@ -103,6 +106,7 @@ class AgentWorkflow:
             terminal_outcome=None,
             relevance_result=None,
             research_result=None,
+            citations=[],
             verification_result=None,
             structured_error="",
         )
@@ -112,6 +116,8 @@ class AgentWorkflow:
             "verification_report": final_state["verification_report"],
             "verification_retries": final_state["verification_retries"],
             "terminal_outcome": final_state["terminal_outcome"].value,
+            "citations": [citation.model_dump() for citation in final_state["citations"]],
+            "citation_report": format_citation_report(final_state["citations"]),
         }
 
     def _check_relevance_step(self, state: AgentState) -> dict:
@@ -143,7 +149,11 @@ class AgentWorkflow:
             return self._structured_failure(
                 "The research model returned malformed structured output.", exc
             )
-        return {"research_result": result, "draft_answer": result.draft_answer}
+        return {
+            "research_result": result,
+            "draft_answer": result.draft_answer,
+            "citations": result.citations,
+        }
 
     def _verification_step(self, state: AgentState) -> dict:
         try:

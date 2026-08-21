@@ -395,8 +395,91 @@ After:  model JSON → Pydantic result → typed workflow state → enum/boolean
 - Human approval required before V1-C05: YES.
 
 ## V1-C05 — Source & Citation Grounding
-**Status:** BLOCKED.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; no V1-C06 work started.
+
+### Contract Map / Risk Map
+
+- **Before:** Docling/header splitting produced chunks with incidental header metadata, but no stable document/chunk identity or normalized source metadata. Chroma/BM25 retrieved `Document` objects, research concatenated their text without identifiers, and neither workflow state nor Gradio exposed citations.
+- **Ownership after:** `DocumentProcessor` owns deterministic local document/chunk provenance; `agents/citations.py` owns deterministic context labelling, resolution, and human display; `ResearchAgent` owns the model-proposed claim→chunk ID handoff; `AgentWorkflow` transports resolved citations without consuming them for control; `app.py` owns the minimal Sources & Citations display.
+- **Trust boundary:** model-supplied chunk IDs are untrusted. The resolver matches them only against the current retrieved documents. Unknown or absent mappings become explicit unavailable citations; they never create a fabricated source, change relevance/verification routing, or spend a retry.
+- **Metadata availability:** `document_id` is the existing file SHA-256; `chunk_id` is a SHA-256 of document ID, chunk position, and content; source name and Markdown section are attached at ingestion. Page is preserved only when a retrieved document already supplies integer `page` metadata; current Docling Markdown splitting does not invent page numbers.
+
+### Implementation / Grounding Flow
+
+```text
+upload → file hash + Docling/header chunks → document_id/chunk_id/source/section metadata
+       → Chroma + BM25 hybrid retrieval preserves metadata
+       → labelled retrieved context → typed claim_sources from ResearchAgent
+       → deterministic ID resolution → AgentState/full_pipeline → Gradio Sources & Citations
+```
+
+- `document_processor/file_handler.py:DocumentProcessor._attach_provenance()` attaches the same metadata after both fresh processing and cached loads, preserving the existing cache and deduplication behavior.
+- `agents/contracts.py` extends `ResearchResult` with typed `ClaimSource` model handoffs and resolved `SourceCitation` records. Existing answer/control contracts remain intact.
+- `agents/citations.py` labels only known retrieved chunk IDs for the research prompt, resolves those IDs against current evidence, and renders a user-facing report. No human-readable citation text is used as a workflow condition.
+- `agents/research_agent.py` requests `claim_sources` alongside `draft_answer`; an empty mapping is allowed so unavailable citation evidence is visible rather than a crash.
+- `agents/workflow.py` carries citations in typed workflow state and returns structured citation data plus a display report. C03 retry and terminal routing remain driven solely by typed relevance/verification state.
+- `app.py` adds a minimal read-only Sources & Citations textbox; existing answer and verification outputs remain unchanged.
+- `test/test_citation_grounding.py` adds deterministic local provenance/citation acceptance coverage.
+
+### Tests / Runtime
+
+- `venv/bin/python -m unittest discover -s test -p 'test_citation_grounding.py' -v`: PASS — 6 focused tests. Proves fresh+cached stable metadata, hybrid metadata preservation, valid claim→retrieved-source mapping, unknown-ID fallback, missing-mapping fallback, and no source invention.
+- `venv/bin/python -m unittest discover -s test -p 'test_structured_contracts.py' -v`: PASS — 6 V1-C04 regression tests.
+- `venv/bin/python -m unittest discover -s test -p 'test_bounded_workflow.py' -v`: PASS — 8 V1-C03 regression tests.
+- `venv/bin/python -m unittest discover -s test -p 'test_provider_boundary.py' -v`: PASS — 10 V1-C02 provider/configuration/hybrid-retrieval regression tests.
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 30 deterministic tests total.
+- `venv/bin/python test/test1.py`: PASS — exit code `0`; retained baseline Docling diagnostic completed with its known malformed PNG-as-PDF and Docling/Torch warnings.
+- `venv/bin/python -m pip check`: PASS — `No broken requirements found`.
+- `venv/bin/python -m compileall -q app.py agents config document_processor providers retriever test`: PASS.
+- Active source/requirements IBM Watsonx, LangChain IBM, LangChain OpenAI, IBM endpoint/model scan: PASS — no active runtime coupling found.
+- Gradio integration: PASS — temporary `GRADIO_SERVER_PORT=7864` process listened on `127.0.0.1:7864`; direct HTTP probe returned `200`; only that validation PID was terminated and generated `.gradio` artifacts were removed.
+- A later repeat after marking the output field non-interactive did not reach HTTP-ready state within its process-management polling window and emitted no application error. The change is display-only, compilation passed afterward, and the earlier same-run HTTP-200 validation remains the application-startup evidence.
+- No Ollama model was downloaded or invoked. C05 validation uses deterministic fake providers; no retrieval-quality tuning was performed.
+
+### Learning Record
+
+**What we built / why:** A local provenance chain that lets a reader inspect which retrieved document chunk a model associated with each important answer claim. Previously DocChat could retrieve evidence but could not expose that evidence as a stable source reference.
+
+**How it works:**
+
+1. The processor uses the existing file hash as a stable local document ID and derives a deterministic ID for each split chunk.
+2. Chroma/BM25 returns those same metadata-bearing chunks. The Research Agent receives text labelled only with their real IDs and returns typed claim-to-ID mappings.
+3. Deterministic code, not the model, resolves IDs against the retrieved set and prepares citations for the workflow and UI.
+4. Unknown IDs or no mapping render an explicit unavailable-citation message. They do not invent attribution or influence verification/retry control.
+
+**Architecture before → after:**
+
+```text
+Before: source file → anonymous chunk text → answer → no inspectable source
+After:  source file → stable document/chunk metadata → retrieved labelled evidence
+        → typed claim_sources → deterministic resolution → user-visible citations
+```
+
+**Professional engineering lesson:** Citation text is not provenance by itself. Reliable grounding needs an identity established before model generation, a constrained model reference, and deterministic validation after generation. Keeping that path separate from workflow control prevents an untrusted citation from changing program behavior.
+
+**Student takeaway:** RAG is not automatically grounded because it retrieves text. Grounding becomes inspectable when the system can carry a source identity from ingestion through retrieval to the final answer. The LLM may propose a source, but deterministic code must verify that the source is actually present.
+
+### Exit Gate Proof
+
+- **Users can inspect where important claims came from:** valid mapping test produces a source name, section, page (when available), and stable chunk ID in `citation_report`; Gradio exposes that report in Sources & Citations.
+- **Stable document/chunk identity and metadata:** fresh/cached processing test proves stable IDs, document ID, source name, and section; hybrid retrieval test proves metadata survives Chroma + BM25.
+- **Claim-to-source mapping:** typed `ClaimSource` IDs are resolved only against the retrieved document set and returned as structured `citations`.
+- **Graceful citation fallback:** unknown ID, empty ID list, and missing mapping tests show explicit unavailable messages without source fabrication or routing change.
+- **Completed architecture preserved:** all 24 C02–C04 deterministic regressions pass; bounded terminal behavior and vendor-neutral Ollama/provider/hybrid-RAG architecture remain intact.
+- **No future Card leakage:** no web provenance/freshness, retriever quality metric/tuning, advanced claim-level verification, cloud provider, or V1-C06 implementation was added.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused tests: PASS — 6 V1-C05 provenance/citation tests.
+- Relevant regression tests: PASS — 6 V1-C04 + 8 V1-C03 + 10 V1-C02 tests; 30 deterministic tests total; retained `test/test1.py` exit code `0`.
+- Card acceptance: PASS — metadata propagation, source mapping, unavailable-citation behavior, and user-display contract are all demonstrated.
+- Exit Gate fully mapped to evidence: YES.
+- Evidence Map updated: YES.
+- Diff/state/secrets/generated-artifact review: PASS — only intended C05 files changed; `git diff --check`, `git status`, credential scan, C04 free-text-routing guard, and generated-artifact check passed; temporary Gradio and Python-cache artifacts were removed.
+- Known limitations: current Docling Markdown chunks do not expose page numbers, so page is shown only if future/alternate retrieval metadata provides it; real models can return an empty `claim_sources` array, which is displayed as unavailable rather than treated as proof of grounding. Claim-level completeness/quality evaluation belongs to V1-C06/C07; web provenance/freshness belongs to V2.
+- Human approval required before V1-C06: YES.
 
 ## V1-C06 — Retrieval Quality Evaluation
 **Status:** BLOCKED.
