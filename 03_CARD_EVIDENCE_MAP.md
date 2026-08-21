@@ -167,8 +167,88 @@ Human approval required before next Card: YES.
 ---
 
 ## V1-C02 — Provider Boundary & Ollama Local Runtime
-**Status:** BLOCKED — requires V1-C01 closure and owner approval; no implementation started.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; no V1-C03 work started.
+
+### Contract Map / Risk Map
+
+- **Before:** `app.py` composed the UI, `RetrieverBuilder` directly constructed Watsonx embeddings, and the relevance, research, and verification agents each directly constructed Watsonx chat models. IBM credentials, project IDs, endpoint, and model IDs were embedded in those runtime owners.
+- **Path preserved:** Gradio upload/question → `DocumentProcessor` validation, Docling conversion, Markdown splitting, cache/deduplication → `RetrieverBuilder` Chroma + BM25 weighted ensemble → `AgentWorkflow` relevance → research → verification → Gradio answer/report/session reuse.
+- **New boundary:** `providers/contracts.py` owns the minimal `ChatProvider.generate()` and LangChain-compatible `EmbeddingProvider` operations. `providers/ollama.py` alone imports `langchain_ollama`; `providers/factory.py` composes the configured provider bundle. Agents and retriever receive contracts through constructor injection.
+- **Risks controlled:** provider failure is wrapped as `OllamaProviderError`; deterministic fakes cover normal unit tests; configuration has no credentials; no cloud adapter, workflow-loop change, schema redesign, or provider marketplace was introduced. The pre-existing unbounded verification re-research route remains explicitly deferred to V1-C03.
+
+### Implementation / Configuration
+
+- `providers/contracts.py`, `providers/ollama.py`, and `providers/factory.py`: vendor-neutral chat/embedding contracts, Ollama adapters, and runtime composition.
+- `agents/relevance_checker.py`, `agents/research_agent.py`, `agents/verification_agent.py`, and `agents/workflow.py`: retain prompts, responsibilities, and graph topology while consuming an injected `ChatProvider`; no active IBM SDK import remains.
+- `retriever/builder.py`: retains Chroma, BM25, vector retrieval, and `[0.4, 0.6]` ensemble weights while receiving an injected `EmbeddingProvider`.
+- `config/settings.py`: removes the unused mandatory `OPENAI_API_KEY`; adds non-secret `OLLAMA_BASE_URL`, `OLLAMA_CHAT_MODEL`, `OLLAMA_EMBEDDING_MODEL`, and validated `GRADIO_SERVER_PORT` (default `7860`, range `1..65535`).
+- `app.py`: remains the Gradio/session adapter; it composes the generic provider bundle and uses the configured local port. It does not import an Ollama or IBM SDK.
+- `.env.example`: documents local non-secret Ollama and Gradio settings; `.env` remains ignored.
+- `requirements.txt`: replaced an inherited platform-specific `pip freeze` with direct application dependencies and tested compatibility pins. Watsonx, LangChain IBM, IBM COS, OpenAI, CUDA/NVIDIA, and unrelated transitive pins are absent. `docling-ibm-models` remains a transitive Docling parsing dependency, not an active Watsonx runtime dependency. GPU acceleration is owned by the external Ollama runtime, so no Python CUDA extra is needed for the active application.
+
+### Tests / Runtime
+
+- `venv/bin/python -m pip install --dry-run --ignore-installed --only-binary=:all: -r requirements.txt`: PASS on macOS; resolved the direct manifest without Linux CUDA wheels or an IBM runtime package.
+- `venv/bin/python -m pip check`: PASS — `No broken requirements found`.
+- `venv/bin/python -m unittest discover -s test -p 'test_provider_boundary.py' -v`: PASS — 10 tests. Covers configuration/default/override/range validation, credential-free provider construction, Ollama adapter success/failure behavior, Chroma + BM25 hybrid retrieval, injected workflow behavior, and active-source vendor-import guard.
+- `venv/bin/python test/test1.py`: PASS — exit code `0`. Docling parsed both tracked PDF paths; the known `sample.png` passed to `PyPDFLoader` produced the expected invalid-PDF `Stream has ended unexpectedly` diagnostic.
+- `venv/bin/python -m compileall -q app.py agents config document_processor providers retriever`: PASS.
+- Active source/requirements scan for Watsonx, LangChain IBM, LangChain OpenAI, IBM project/endpoint/model construction: PASS.
+- Provider/retriever/workflow construction: PASS without credentials or an Ollama request.
+- Gradio startup: PASS — with `GRADIO_SERVER_PORT=7860`, the app bound `127.0.0.1:7860`, served a successful local HTTP response, and the validation process was shut down. The prior port-5000 collision with macOS ControlCenter is solved through configuration, not process interference.
+- Real local Ollama smoke path: PASS using existing Ollama runtime `0.31.2`, chat model `qwen3.5:4b`, and embedding model `qwen3-embedding:0.6b`; no model was downloaded. Real embeddings had dimension `1024`; a temporary Chroma + BM25 hybrid retriever returned one source chunk; real research and verification responses were nonempty.
+- Runtime warnings observed but non-blocking: Chroma telemetry-event warnings and torch/Docling accelerator warnings. They did not change results or exit status.
+
+### Known Limitations / Deferrals
+
+- The tiny one-chunk synthetic real smoke case produced relevance `NO_MATCH` despite its source discussing hybrid retrieval. This is an evaluation/prompt-quality observation for V1-C06/V1-C07, not tuned in C02.
+- The workflow's existing verification re-research route remains unbounded and is owned exclusively by V1-C03.
+- The active defaults in `.env.example` are portable names (`llama3.2` and `nomic-embed-text`); this machine's verified smoke used environment overrides for already-installed Qwen models. A developer must configure/pull suitable local Ollama models before a real query.
+- The direct manifest resolves compatible transitive packages through pip. A fully locked, cross-platform deployment artifact is deferred to a later deployment/reproducibility Card; no future AWS/cloud provider was added.
+
+### Learning Record
+
+**What we built / why:** A narrow dependency-inverted boundary lets the RAG core ask for text generation and embeddings without knowing a vendor SDK, credential shape, cloud project, endpoint, or model-client API. It turns an IBM lab runtime into a local-first DocChat runtime while preserving useful ingestion, retrieval, workflow, verification, and UI behavior.
+
+**How it works:**
+1. `Settings` reads local non-secret model, endpoint, and port configuration.
+2. The provider factory creates Ollama chat and embedding adapters behind small core contracts.
+3. The retriever sends texts/queries to the embedding contract; Chroma vector search and BM25 remain combined deterministically.
+4. The workflow passes prompts to the chat contract for relevance, research, and verification; the Gradio adapter displays its existing result shape.
+
+**Architecture before → after:**
+
+```text
+Before: Gradio/Core → direct Watsonx models + embeddings → IBM credentials/projects/services
+After:  Gradio/Core → ChatProvider / EmbeddingProvider → Ollama local runtime
+Future: DocChat Core → same contracts → optional Local / Cloud provider adapters
+```
+
+**Professional engineering lesson:** Dependency inversion is practical risk control, not abstraction for its own sake. Keep provider-specific HTTP/client details in one adapter, test the core with deterministic fakes, validate one real local integration, and keep operating-system/model concerns outside business and workflow logic. A requirements file should describe the application boundary, not capture every package from one developer's GPU-enabled machine.
+
+**Student takeaway:** An LLM provider produces text; an embedding provider converts text into vectors for similarity search. They are separate dependencies in hybrid RAG. By injecting both behind small interfaces, Chroma/BM25 retrieval and the agent workflow survive a model-provider migration without becoming Ollama- or IBM-specific.
+
+### Exit Gate Proof
+
+- **Local Ollama core path runs:** real configured Ollama embeddings, hybrid retrieval, relevance/research/verification calls, and Gradio startup all passed with no model download.
+- **No IBM credential/project/runtime-service dependence:** active source/requirements scan passed; no Watsonx/IBM model construction or credential settings remain.
+- **Provider boundary is narrow and testable:** contracts, adapters, factory, deterministic fakes, adapter failure tests, and constructor injection are present.
+- **Useful baseline behavior preserved:** Docling diagnostic, Chroma + BM25 hybrid test, workflow construction test, and Gradio session/UI startup all passed.
+- **No future Card leakage:** no cloud/AWS/OpenAI adapter, no workflow-loop bound, no structured contract redesign, and no V1-C03 implementation.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused tests: PASS — 10 V1-C02 provider/configuration/retrieval/workflow tests.
+- Relevant existing regression: PASS — `test/test1.py` exit code 0 with documented malformed PNG-as-PDF limitation.
+- Card acceptance: PASS — macOS fresh dependency resolution, `pip check`, provider construction, hybrid retrieval, workflow construction, configured Gradio HTTP startup, and real local Ollama smoke path.
+- Prior Card regression: PASS — C01 baseline/provenance boundaries remain documented; no history/provenance was removed.
+- Exit Gate fully mapped to evidence: YES.
+- Evidence Map updated: YES.
+- Diff/state/secrets/generated-artifact review: PASS — `git diff --check`, `git status`, changed-file review, ignored `.env` check, and secret-assignment scan completed; no generated runtime artifact remains.
+- Known limitations: Chroma telemetry warnings; synthetic relevance `NO_MATCH`; V1-C03 loop bounding deferred; no models are committed.
+- Human approval required before V1-C03: YES.
 
 ## V1-C03 — Bounded Research / Verification Loop
 **Status:** BLOCKED — dependency chain not satisfied.

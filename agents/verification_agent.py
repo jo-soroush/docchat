@@ -1,31 +1,10 @@
-import json  # Import for JSON serialization
-from ibm_watsonx_ai.foundation_models import ModelInference
-from ibm_watsonx_ai import Credentials, APIClient
 from typing import Dict, List
 from langchain.schema import Document
-
-credentials = Credentials(
-                   url = "https://us-south.ml.cloud.ibm.com",
-                  )
-client = APIClient(credentials)
+from providers.contracts import ChatProvider
 
 class VerificationAgent:
-    def __init__(self):
-        """
-        Initialize the verification agent with the IBM WatsonX ModelInference.
-        """
-        # Initialize the WatsonX ModelInference
-        print("Initializing VerificationAgent with IBM WatsonX ModelInference...")
-        self.model = ModelInference(
-            model_id="ibm/granite-4-h-small", 
-            credentials=credentials,
-            project_id="skills-network",
-            params={
-                "max_tokens": 200,            # Adjust based on desired response length
-                "temperature": 0.0,           # Remove randomness for consistency
-            }
-        )
-        print("ModelInference initialized successfully.")
+    def __init__(self, model: ChatProvider):
+        self.model = model
 
     def sanitize_response(self, response_text: str) -> str:
         """
@@ -153,14 +132,7 @@ class VerificationAgent:
         # Call the LLM to generate the verification report
         try:
             print("Sending prompt to the model...")
-            response = self.model.chat(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt  # Ensure content is a string
-                    }
-                ]
-            )
+            llm_response = self.model.generate(prompt, temperature=0.0, max_tokens=200)
             print("LLM response received.")
         except Exception as e:
             print(f"Error during model inference: {e}")
@@ -168,7 +140,7 @@ class VerificationAgent:
 
         # Extract and process the LLM's response
         try:
-            llm_response = response['choices'][0]['message']['content'].strip()
+            llm_response = llm_response.strip()
             print(f"Raw LLM response:\n{llm_response}")
         except (IndexError, KeyError) as e:
             print(f"Unexpected response structure: {e}")

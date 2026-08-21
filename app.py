@@ -6,7 +6,9 @@ import os
 from document_processor.file_handler import DocumentProcessor
 from retriever.builder import RetrieverBuilder
 from agents.workflow import AgentWorkflow
-from config import constants, settings
+from providers.factory import build_runtime_providers
+from config import constants
+from config.settings import settings
 from utils.logging import logger
 
 # 1) Define some example data 
@@ -24,8 +26,9 @@ EXAMPLES = {
 
 def main():
     processor = DocumentProcessor()
-    retriever_builder = RetrieverBuilder()
-    workflow = AgentWorkflow()
+    providers = build_runtime_providers()
+    retriever_builder = RetrieverBuilder(providers.embeddings)
+    workflow = AgentWorkflow(providers.chat)
 
     # Define custom CSS for styling
     css = """
@@ -187,7 +190,11 @@ def main():
             outputs=[answer_output, verification_output, session_state]
         )
 
-    demo.launch(server_name="127.0.0.1", server_port=5000, share=True)
+    demo.launch(
+        server_name="127.0.0.1",
+        server_port=settings.GRADIO_SERVER_PORT,
+        share=True,
+    )
 
 def _get_file_hashes(uploaded_files: List) -> frozenset:
     """Generate SHA-256 hashes for uploaded files."""

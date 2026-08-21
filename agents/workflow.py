@@ -5,6 +5,7 @@ from .verification_agent import VerificationAgent
 from .relevance_checker import RelevanceChecker
 from langchain.schema import Document
 from langchain.retrievers import EnsembleRetriever
+from providers.contracts import ChatProvider
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,10 +19,10 @@ class AgentState(TypedDict):
     retriever: EnsembleRetriever
 
 class AgentWorkflow:
-    def __init__(self):
-        self.researcher = ResearchAgent()
-        self.verifier = VerificationAgent()
-        self.relevance_checker = RelevanceChecker()
+    def __init__(self, chat_provider: ChatProvider):
+        self.researcher = ResearchAgent(chat_provider)
+        self.verifier = VerificationAgent(chat_provider)
+        self.relevance_checker = RelevanceChecker(chat_provider)
         self.compiled_workflow = self.build_workflow()  # Compile once during initialization
         
     def build_workflow(self):

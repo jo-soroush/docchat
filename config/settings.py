@@ -1,10 +1,19 @@
-from pydantic_settings import BaseSettings
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from .constants import MAX_FILE_SIZE, MAX_TOTAL_SIZE, ALLOWED_TYPES
-import os
 
 class Settings(BaseSettings):
-    # Required settings
-    OPENAI_API_KEY: str
+    """Runtime configuration loaded from environment variables or a local .env file."""
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    # Local provider settings. Model values are defaults, not credentials.
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
+    OLLAMA_CHAT_MODEL: str = "llama3.2"
+    OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
+
+    # Gradio binds locally by default; override for a local port conflict.
+    GRADIO_SERVER_PORT: int = Field(default=7860, ge=1, le=65535)
 
     # Optional settings with defaults
     MAX_FILE_SIZE: int = MAX_FILE_SIZE
@@ -17,7 +26,7 @@ class Settings(BaseSettings):
 
     # Retrieval settings
     VECTOR_SEARCH_K: int = 10
-    HYBRID_RETRIEVER_WEIGHTS: list = [0.4, 0.6]
+    HYBRID_RETRIEVER_WEIGHTS: list[float] = Field(default_factory=lambda: [0.4, 0.6])
 
     # Logging settings
     LOG_LEVEL: str = "INFO"
@@ -25,9 +34,5 @@ class Settings(BaseSettings):
     # New cache settings with type annotations
     CACHE_DIR: str = "document_cache"
     CACHE_EXPIRE_DAYS: int = 7
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 settings = Settings()
