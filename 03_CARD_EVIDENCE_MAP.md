@@ -79,6 +79,7 @@ DocChat Core → Provider Abstraction → Local / Cloud Providers
 - Tracking/upstream verified: selected IBM baseline is `origin/2-final` commit `eb9be30`; local baseline branch previously tracked `github/docchat-v1-baseline`.
 - Working tree verified: temporary Watsonx portability source/config/test artifacts were removed. Intended C01 changes are governance, roadmap, Card specification, evidence, and Git workflow documents only; `venv/` is ignored.
 - Baseline commit verified: `eb9be30 — update embeddings`.
+- V1-C01 checkpoint: `8ff1f44 — docs: close V1-C01 architecture audit` (local only; not pushed, merged, or presented as approval to begin V1-C02).
 
 ### Exit Gate
 **PASS — awaiting human closure approval.**
