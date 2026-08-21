@@ -1,25 +1,11 @@
-from ibm_watsonx_ai.foundation_models import ModelInference
-from ibm_watsonx_ai import Credentials, APIClient
-from config.settings import settings
-import re
+from providers.contracts import ChatProvider
 import logging
 
 logger = logging.getLogger(__name__)
 
-credentials = Credentials(
-                   url = "https://us-south.ml.cloud.ibm.com",
-                  )
-client = APIClient(credentials)
-
 class RelevanceChecker:
-    def __init__(self):
-        # Initialize the WatsonX ModelInference
-        self.model = ModelInference(
-            model_id="ibm/granite-4-h-small",
-            credentials=credentials,
-            project_id="skills-network",
-            params={"temperature": 0, "max_tokens": 10},
-        )
+    def __init__(self, model: ChatProvider):
+        self.model = model
 
     def check(self, question: str, retriever, k=3) -> str:
         """
@@ -65,25 +51,12 @@ class RelevanceChecker:
 
         # Call the LLM
         try:
-            response = self.model.chat(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt  # Changed from list to string
-                    }
-                ]
-            )
+            llm_response = self.model.generate(prompt, temperature=0, max_tokens=10).upper()
         except Exception as e:
             logger.error(f"Error during model inference: {e}")
             return "NO_MATCH"
 
-        # Extract the content from the response
-        try:
-            llm_response = response['choices'][0]['message']['content'].strip().upper()
-            logger.debug(f"LLM response: {llm_response}")
-        except (IndexError, KeyError) as e:
-            logger.error(f"Unexpected response structure: {e}")
-            return "NO_MATCH"
+        logger.debug(f"LLM response: {llm_response}")
 
         print(f"Checker response: {llm_response}")
 

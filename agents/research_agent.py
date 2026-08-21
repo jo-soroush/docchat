@@ -1,33 +1,11 @@
-from ibm_watsonx_ai.foundation_models import ModelInference
-from ibm_watsonx_ai import Credentials, APIClient
 from typing import Dict, List
 from langchain.schema import Document
-from config.settings import settings
-import json
-
-credentials = Credentials(
-                   url = "https://us-south.ml.cloud.ibm.com",
-                  )
-client = APIClient(credentials)
+from providers.contracts import ChatProvider
 
 
 class ResearchAgent:
-    def __init__(self):
-        """
-        Initialize the research agent with the IBM WatsonX ModelInference.
-        """
-        # Initialize the WatsonX ModelInference
-        print("Initializing ResearchAgent with IBM WatsonX ModelInference...")
-        self.model = ModelInference(
-            model_id="meta-llama/llama-4-maverick-17b-128e-instruct-fp8", 
-            credentials=credentials,
-            project_id="skills-network",
-            params={
-                "max_tokens": 300,            # Adjust based on desired response length
-                "temperature": 0.3,           # Controls randomness; lower values make output more deterministic
-            }
-        )
-        print("ModelInference initialized successfully.")
+    def __init__(self, model: ChatProvider):
+        self.model = model
 
     def sanitize_response(self, response_text: str) -> str:
         """
@@ -72,14 +50,7 @@ class ResearchAgent:
         # Call the LLM to generate the answer
         try:
             print("Sending prompt to the model...")
-            response = self.model.chat(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt  # Ensure content is a string
-                    }
-                ]
-            )
+            llm_response = self.model.generate(prompt, temperature=0.3, max_tokens=300)
             print("LLM response received.")
         except Exception as e:
             print(f"Error during model inference: {e}")
@@ -87,7 +58,7 @@ class ResearchAgent:
 
         # Extract and process the LLM's response
         try:
-            llm_response = response['choices'][0]['message']['content'].strip()
+            llm_response = llm_response.strip()
             print(f"Raw LLM response:\n{llm_response}")
         except (IndexError, KeyError) as e:
             print(f"Unexpected response structure: {e}")
