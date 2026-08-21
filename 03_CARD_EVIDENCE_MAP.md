@@ -672,8 +672,85 @@ The first evaluator draft incorrectly treated matching terminal outcome/retry co
 V1-C08 can attach safe per-run trace data to the already explicit decisions and outcomes so a failed real query can be localized to retrieval, relevance, research, verification, routing, or infrastructure. It must not be started without separate approval.
 
 ## V1-C08 — Observability & Run Trace
-**Status:** BLOCKED.
-**Evidence:** Pending.
+**Status:** READY FOR HUMAN REVIEW — Exit Gate and Card Quality Gate evidenced; V1-C09 has not started.
+
+### Contract Map / Risk Map
+
+- **Before:** `AgentWorkflow.full_pipeline()` returned final answer, verification report, citations, typed C07 evaluation values, retry count, and terminal outcome. It logged only a retrieval count. A poor real run could not be reconstructed as a sequence of retrieval, relevance, research, verification, route, retry, and terminal decisions.
+- **Trace owner:** `AgentWorkflow` owns the graph state and is therefore the only appropriate C08 owner for a per-run trace. C08 does not change `RelevanceResult`, `ResearchResult`, `VerificationResult`, C03 routing predicates, providers, retriever construction, or Gradio behavior.
+- **Safe contract:** `RunTrace` contains an opaque UUID `run_id`, total duration, and ordered `RunTraceEvent` records. Each event has only stage, elapsed/stage latency, C05 `chunk_id` values, typed relevance/verification fields, retry attempt, route, terminal outcome, and a generic safe error where an existing malformed-output path occurs.
+- **Risk controls:** traces never retain the question, source/document text, prompt, draft answer, verification/citation prose, model response, or raw exception. C08 records the existing typed malformed-output failure but deliberately does not catch/redesign retriever/provider failure behavior; that broader failure ownership remains V1-C09.
+
+### Architecture Before → After
+
+```text
+Before: retriever count log + final workflow response
+After:  retriever count log + final workflow response + content-free typed RunTrace
+
+RunTrace:
+run_id → RETRIEVAL IDs/latency → relevance decision/route → research attempt/latency
+       → verification decision/route → retry route(s) → terminal outcome/safe error
+```
+
+- `agents/run_trace.py`: typed `TraceStage`, `RunTraceEvent`, and `RunTrace` contracts. `model_dump(mode="json")` makes the returned trace JSON-safe.
+- `agents/workflow.py`: initializes one run ID/timer, records trace events at retrieval, relevance, research, verification, retry routing, and all typed terminals, and additively returns `run_trace`. Per-stage latency and total duration are measured with `perf_counter()`; routing policy is unchanged.
+- `test/test_run_trace.py`: four deterministic C08 tests cover verified, retry-exhausted, out-of-scope, and malformed-output paths.
+
+### Baseline and Measured Evidence
+
+- **Baseline:** prior to C08, inspection found no run ID, structured trace contract, retrieved-ID trace, per-stage latency, route history, or safe-error trace. C07 had evaluation fields for final state only; it could not explain a specific workflow execution path.
+- **Final deterministic trace evidence:**
+  - verified path records `RETRIEVAL → RELEVANCE(CAN_ANSWER/relevant) → RESEARCH → VERIFICATION(supported/verified) → TERMINAL(VERIFIED)`;
+  - retry-exhausted path records each verification route (`re_research`, `re_research`, `retry_exhausted`), routing attempts `1, 2`, and terminal `RETRY_EXHAUSTED`;
+  - out-of-scope path records only retrieval, relevance, and `OUT_OF_SCOPE` terminal, proving research/verification were skipped;
+  - malformed verification JSON produces a `FAILURE` terminal with the generic error `The verification model returned malformed structured output.` and omits both raw malformed response and fixture question/document content.
+- **Quality-layer separation remains explicit:** C06 still measures retrieval, C07 still measures answer/citation/typed-verification/routing behavior, and C08 measures diagnosability/trace completeness rather than retuning any of those scores.
+
+### Tests / Validation
+
+- `venv/bin/python -m unittest discover -s test -p 'test_run_trace.py' -v`: PASS — 4 C08 focused trace-completeness and safe-error tests.
+- C02–C07 focused regressions: PASS — C02 10/10, C03 8/8, C04 6/6, C05 6/6, C06 6/6, C07 6/6 (42/42).
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 46 deterministic tests total.
+- `venv/bin/python -m evaluation.run_retrieval_evaluation`: PASS — unchanged C06 BM25/vector/hybrid controlled baseline (4 scored + 1 OOS case per mode, Hit Rate@3 and mean Recall@3 each `1.00`).
+- `venv/bin/python -m evaluation.run_answer_verification_evaluation`: PASS — unchanged C07 retrieval and 10-case answer/verification evaluation.
+- `venv/bin/python -m pip check`: PASS — `No broken requirements found.`
+- `venv/bin/python -m compileall -q agents config document_processor evaluation providers retriever app.py`: PASS.
+- `venv/bin/python test/test1.py`: PASS — retained Docling diagnostic exited `0`; its existing malformed PNG-as-PDF parser message and non-blocking local Docling/Hugging Face cache/no-accelerator warnings were observed.
+- Active IBM/Watsonx/OpenAI runtime-coupling scan: PASS — no active production SDK import; only C02's negative import-scan test tuple matches.
+- Gradio startup was not rerun because C08 makes no UI/startup change and the UI does not consume `run_trace`; C02/C04 provider/workflow UI-adapter regression coverage remains green.
+
+### Defect Discovered and Fixed
+
+During C08 implementation, cumulative elapsed time alone would not identify which node was slow. `RunTraceEvent.stage_latency_ms` was added before acceptance validation, while retaining `elapsed_ms` and total `duration_ms`. This is a C08-only trace-precision correction; no functional agent/retrieval/routing policy changed.
+
+### Learning Record
+
+**What we built / why:** Every workflow result now carries a small safe trace that explains what the system did without retaining the contents it processed. This allows an engineer to distinguish “retrieved the wrong evidence,” “relevance stopped the run,” “verification requested correction,” “retry budget was exhausted,” and “typed model output failed.”
+
+**Professional engineering lesson:** Observability is a data contract, not just print statements. Decide what must be visible to diagnose a failure, then explicitly exclude sensitive/untrusted content. Structured decisions already used for routing are ideal trace inputs because they are reliable, compact, and testable.
+
+**Student takeaway:** A run trace is like a flight recorder for one agent workflow. It should answer *which stage ran, which evidence IDs were used, what decision was made, how long it took, and how it ended*—not copy the user's documents or model conversation into logs.
+
+### Exit Gate Proof
+
+- **Poor result localization:** every C08 test terminal path returns an ordered run ID trace with stage, retrieved IDs, typed decisions, attempts, route, latency, terminal result, and safe error where applicable.
+- **Safe trace contract:** tests prove private question/document text and raw malformed model response do not appear in serialized traces.
+- **Existing behavior preserved:** C02–C07 regressions (42/42) and complete deterministic suite (46/46) pass; C06/C07 evaluation baselines remain unchanged.
+- **No future-scope leakage:** no telemetry backend, logging/export platform, provider/retrieval/prompt tuning, UI redesign, broad failure redesign, model download, or V1-C09 implementation was added.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human review.**
+
+- Focused C08 tests: PASS — 4/4.
+- Prior Card regressions: PASS — 42/42; full deterministic suite 46/46.
+- Card acceptance: PASS — trace completeness, safe-error behavior, C06/C07 runner preservation, `pip check`, compilation, retained diagnostic, and vendor-runtime scan all passed.
+- Diff/state/artifact/secrets review: PASS — only intended C08 workflow-trace, contract, focused-test, and evidence files changed; `git diff --check` passed; generated `:memory:.ses` and Python caches were removed; no `.env`, credentials, local model files, or temporary Chroma data remain.
+- Human approval is required before commit/delivery, and before V1-C09: YES.
+
+### What V1-C09 Builds On Next
+
+V1-C09 can use the safe C08 trace to prove controlled handling of known parser, retrieval, embedding, model, zero-document, cache, and partial-processing failures. It must own the actual fallback behavior and must not be started without separate approval.
 
 ## V1-C09 — Robust Error Handling & Fallbacks
 **Status:** BLOCKED.
