@@ -119,6 +119,14 @@ Do not implement during the initial map.
 - Do not turn every node, tool, retrieval component, or deterministic operation into an agent.
 - Prefer understandable, testable architecture over unnecessary agent count.
 
+### Card Authorization and Local Execution
+
+Once the user explicitly approves a Card, that approval authorizes routine, reversible, non-destructive local work within the approved Card contract. Do not request a new owner-level approval for normal in-scope source edits; repository inspection; tests, linters, compilation, static checks, dependency inspection/dry-runs; read-only Git inspection; localhost startup/HTTP checks; use of already-installed local models; or cleanup of verified generated artifacts created by the current Card's tests or validation.
+
+This is project-governance authorization, not a bypass for Codex sandbox/security permission prompts. Request or honor sandbox permission whenever the execution environment requires it.
+
+Owner approval remains required before starting another Card; materially expanding scope; significant architecture change outside the Card contract; destructive action affecting real source, user, or project data; secrets/credentials; large downloads or new Ollama model pulls; machine/system changes; commits; pushes; PR creation or other delivery checkpoints; PR merges; force-push/history rewriting; consequential external actions; or any write to IBM `origin`.
+
 ## 6. Architecture Rules
 
 - Deterministic responsibilities remain deterministic when LLM reasoning adds no value.
