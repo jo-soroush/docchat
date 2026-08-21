@@ -898,8 +898,160 @@ All six operations become ordinary questions for the existing backend:
 V1-C11 can document and package the now complete V1 system: provenance, local setup, architecture, evaluation results, limitations, and a reproducible user-facing demonstration without changing the C10 product/backend boundary.
 
 ## V1-C11 — V1 Closure & Portfolio Evidence
-**Status:** BLOCKED.
-**Evidence:** Pending.
+**Status:** IN PROGRESS — implementation and validation complete; awaiting human closure review.
+
+### Problem and Contract / Risk Map
+
+V1 had working Card-level evidence but no single, newcomer-oriented closure record
+that explained how to install, configure, run, test, demonstrate, and distinguish
+the historical IBM baseline from the active independent application. C11 owns
+documentation and reproducibility evidence only; it does not change the runtime.
+
+Verified flow and ownership:
+
+```text
+Developer → README/setup/config → Ollama → Gradio/product adapter
+→ DocumentProcessor → provenance-aware chunks/cache → BM25 + Chroma hybrid retriever
+→ typed LangGraph relevance/research/verification → bounded terminal outcome
+→ answer/report/citations + safe RunTrace.
+```
+
+- `README.md` owns onboarding, local configuration, operation usage, reproducible
+  commands, limitations, and the entry links.
+- `docs/ARCHITECTURE.md` owns the implementation-level architecture and typed
+  contract explanation; application ownership remains in the existing modules.
+- `docs/PROVENANCE_AND_DECISIONS.md` owns the baseline-versus-extension record.
+- `docs/VERIFIED_DEMOS.md` owns the result/demonstration boundary: executed
+  evidence is separated from an unexecuted manual demo recipe.
+- `test/test_project_documentation.py` guards the configuration, six product
+  operations, architecture/provenance claims, and the absence of a misleading
+  clean-room execution claim.
+
+Risks inspected before writing: claiming a clean-machine or real-model run that
+did not occur; confusing IBM provenance with an active runtime dependency;
+describing deferred V2 work as current; exposing a secret; or accidentally
+modifying product/workflow code. The documentation instead records the verified
+macOS/Python environment, model assumptions, evidence boundaries, and no-license
+finding explicitly.
+
+### Architecture Before → After
+
+Before C11, C01–C10 evidence was distributed across Card records and the
+repository had no root onboarding guide, architecture guide, provenance/decision
+guide, or runnable evidence/demonstration guide. After C11, the active V1
+architecture is documented as:
+
+```text
+DocChat Core → ChatProvider / EmbeddingProvider → Ollama local runtime
+Gradio/product adapter → document processing → BM25 + Chroma hybrid RAG
+→ typed, bounded workflow → grounded citations + safe run trace.
+```
+
+The implementation remains unchanged. The historical IBM Skills Network source
+is explicitly a provenance reference (`origin/2-final`, commit `eb9be30`), not
+an active requirement. V1 retains useful baseline document handling, hybrid RAG,
+agent/workflow concepts, and UI while C02–C10 added the provider boundary, local
+runtime, bounded typed flow, grounding, evaluations, observability, safe failures,
+and research-study product operations.
+
+### Implementation Evidence
+
+- Added `README.md`: macOS/Python 3.11.15 setup, isolated environment,
+  `.env.example`, Ollama inspection/configuration, Gradio use, six operations,
+  reproducible commands, limitations, and provenance links.
+- Added `docs/ARCHITECTURE.md`: layer flow, ownership, provider boundary,
+  hybrid retrieval, typed contracts, terminal outcomes, citation and safe-trace
+  boundaries, and V2 deferral.
+- Added `docs/PROVENANCE_AND_DECISIONS.md`: exact baseline reference, absent
+  license finding, baseline-versus-V1 table, C02–C10 decision record, and remote
+  protection guidance.
+- Added `docs/VERIFIED_DEMOS.md`: actual deterministic/evaluation evidence and
+  a clearly labelled manual local demo recipe. It does not claim a fresh OS,
+  model download, or current real-model run.
+- Added `test/test_project_documentation.py`: deterministic documentation
+  consistency checks. An initial assertion assumed an unwrapped sentence; it was
+  corrected to normalize whitespace rather than alter truthful prose.
+
+### Actual Validation and Reproducibility Evidence
+
+- `venv/bin/pip install --dry-run --ignore-installed --only-binary=:all: -r requirements.txt`:
+  PASS on macOS; resolver produced a complete install plan without installing.
+- `venv/bin/python -m unittest discover -s test -p 'test_project_documentation.py' -v`:
+  PASS — 4/4 C11 documentation tests.
+- `venv/bin/python -m unittest discover -s test -v`:
+  PASS — 63/63 full deterministic tests (C01–C10 59 plus C11 4).
+- `venv/bin/python -m evaluation.run_retrieval_evaluation`:
+  PASS — BM25, vector, and hybrid each Hit Rate@3 1.00 and mean Recall@3 1.00
+  on four scored fixture cases; one out-of-scope case excluded.
+- `venv/bin/python -m evaluation.run_answer_verification_evaluation`:
+  PASS — 10/10 golden workflow cases; 9 scored retrieval/citation/verification
+  cases and 10/10 answer/routing outcomes passed.
+- `venv/bin/pip check`: PASS — no broken requirements.
+- `venv/bin/python -m compileall -q agents config document_processor evaluation product providers retriever test utils app.py`:
+  PASS.
+- `GRADIO_SERVER_PORT=7863 venv/bin/python app.py` plus
+  `curl http://127.0.0.1:7863/config`: PASS — the existing application bound
+  locally and its `🧭 Research Operation` selector was present. The temporary
+  validation process was shut down cleanly.
+- Active-source AST scan for IBM/Watsonx/OpenAI imports: PASS — none found in
+  `app.py` or active application packages.
+- Configuration reproduction: a temporary copy of `.env.example` produced the
+  documented local URL, chat/embedding model names, Gradio port 7860, and retry
+  budget 2 through `Settings`; PASS.
+- Local runtime inspection: `ollama --version` reported 0.31.2; `ollama list`
+  confirmed already-installed models including `qwen3.5:4b` and
+  `qwen3-embedding:0.6b`. No model was downloaded. C02's existing real local
+  smoke evidence remains: those models worked with observed embedding dimension
+  1024.
+
+Chroma fixture runs emit pre-existing telemetry warnings in this environment;
+they did not change any test/evaluation result and C11 does not add telemetry
+behavior. The documented default `llama3.2`/`nomic-embed-text` must be installed
+or replaced in the untracked `.env` before a developer runs a real model-backed
+query. C11 does not claim that a clean machine, default models, or broad
+real-model quality was revalidated.
+
+### Professional Lesson and Student Takeaway
+
+Closure documentation is an engineering interface: it should make the correct
+path easy to reproduce while stating exactly what was *not* proven. A reliable
+agentic system needs separate ownership for runtime behavior, evaluation, and
+documentation; a readable answer or a green fixture alone is not evidence of a
+portable product. Preserve provenance, name the actual boundary, use deterministic
+checks for repeatability, and never turn assumptions about models, licenses, or
+clean environments into claims.
+
+### Exit Gate Proof
+
+The C11 requirement that a new developer can clone, configure, run, test,
+understand, and explain V1 is met by the root quick-start/configuration guide,
+explicit Ollama prerequisite and model-selection boundary, documented Gradio
+usage and six operations, architecture/ownership guide, provenance/decision
+record, runnable test/evaluation commands, actual results, and limitations.
+The guide deliberately requires a developer to configure locally available
+models rather than inventing credentials or promising a model download.
+
+### CARD_QUALITY_GATE
+
+**Status: PASS — ready for human closure review.**
+
+- Scope: PASS — documentation, evidence, and documentation tests only; no runtime
+  architecture, provider, retrieval, workflow, or UI behavior changed.
+- Reproducibility/evidence: PASS — dependency dry run, config reproduction,
+  Ollama runtime inspection, deterministic suite, C06/C07 runners, dependency
+  check, and compilation succeeded.
+- Baseline/regressions: PASS — full deterministic suite 63/63 and C06/C07
+  evaluations remain green.
+- Final review: PASS — Gradio HTTP validation and active-source coupling scan
+  passed; `git diff --check` passed; generated Gradio session/cache artifacts
+  were removed; no `.env`, secrets, or unrelated runtime artifacts remain.
+- Human approval remains required before commit/delivery and before V2-C01.
+
+### What V2-C01 Builds On Next
+
+V2-C01 can build an agentic source-routing boundary on a documented, reproducible
+V1 baseline without confusing historical IBM provenance with active runtime
+dependencies. It must remain a separate, explicitly approved Card.
 
 ---
 
