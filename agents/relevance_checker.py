@@ -1,72 +1,41 @@
-from providers.contracts import ChatProvider
+"""Relevance classification behind a typed model-output contract."""
+
 import logging
 
+from providers.contracts import ChatProvider
+
+from .contracts import RelevanceDecision, RelevanceResult
+
 logger = logging.getLogger(__name__)
+
 
 class RelevanceChecker:
     def __init__(self, model: ChatProvider):
         self.model = model
 
-    def check(self, question: str, retriever, k=3) -> str:
-        """
-        1. Retrieve the top-k document chunks from the global retriever.
-        2. Combine them into a single text string.
-        3. Pass that text + question to the LLM for classification.
-
-        Returns: "CAN_ANSWER", "PARTIAL", or "NO_MATCH".
-        """
-
-        logger.debug(f"RelevanceChecker.check called with question='{question}' and k={k}")
-
-        # Retrieve doc chunks from the ensemble retriever
+    def check(self, question: str, retriever, k: int = 3) -> RelevanceResult:
+        """Classify retrieved evidence without exposing raw model text to routing."""
+        logger.debug("RelevanceChecker.check called with k=%s", k)
         top_docs = retriever.invoke(question)
         if not top_docs:
-            logger.debug("No documents returned from retriever.invoke(). Classifying as NO_MATCH.")
-            return "NO_MATCH"
+            return RelevanceResult(
+                decision=RelevanceDecision.NO_MATCH,
+                explanation="The retriever returned no document chunks.",
+            )
 
-        # Combine the top k chunk texts into one string
         document_content = "\n\n".join(doc.page_content for doc in top_docs[:k])
-
-        # Create a prompt for the LLM to classify relevance
         prompt = f"""
-        You are an AI relevance checker between a user's question and provided document content.
+You are an AI relevance checker between a user question and document content.
 
-        **Instructions:**
-        - Classify how well the document content addresses the user's question.
-        - Respond with only one of the following labels: CAN_ANSWER, PARTIAL, NO_MATCH.
-        - Do not include any additional text or explanation.
+Classify whether the passages can answer the question. Return ONLY a JSON object with this exact schema:
+{{"decision":"CAN_ANSWER|PARTIAL|NO_MATCH","explanation":"brief reason"}}
 
-        **Labels:**
-        1) "CAN_ANSWER": The passages contain enough explicit information to fully answer the question.
-        2) "PARTIAL": The passages mention or discuss the question's topic but do not provide all the details needed for a complete answer.
-        3) "NO_MATCH": The passages do not discuss or mention the question's topic at all.
+CAN_ANSWER means the passages fully answer the question. PARTIAL means they discuss the topic but are incomplete. NO_MATCH means they do not discuss the topic.
 
-        **Important:** If the passages mention or reference the topic or timeframe of the question in any way, even if incomplete, respond with "PARTIAL" instead of "NO_MATCH".
-
-        **Question:** {question}
-        **Passages:** {document_content}
-
-        **Respond ONLY with one of the following labels: CAN_ANSWER, PARTIAL, NO_MATCH**
-        """
-
-        # Call the LLM
-        try:
-            llm_response = self.model.generate(prompt, temperature=0, max_tokens=10).upper()
-        except Exception as e:
-            logger.error(f"Error during model inference: {e}")
-            return "NO_MATCH"
-
-        logger.debug(f"LLM response: {llm_response}")
-
-        print(f"Checker response: {llm_response}")
-
-        # Validate the response
-        valid_labels = {"CAN_ANSWER", "PARTIAL", "NO_MATCH"}
-        if llm_response not in valid_labels:
-            logger.debug("LLM did not respond with a valid label. Forcing 'NO_MATCH'.")
-            classification = "NO_MATCH"
-        else:
-            logger.debug(f"Classification recognized as '{llm_response}'.")
-            classification = llm_response
-
-        return classification
+Question: {question}
+Passages: {document_content}
+"""
+        response_text = self.model.generate(prompt, temperature=0, max_tokens=100)
+        result = RelevanceResult.from_model_json(response_text)
+        logger.debug("Structured relevance decision: %s", result.decision.value)
+        return result

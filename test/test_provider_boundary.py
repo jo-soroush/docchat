@@ -1,5 +1,6 @@
 """Focused V1-C02 tests for the vendor-neutral provider boundary."""
 
+import json
 from pathlib import Path
 import os
 from tempfile import TemporaryDirectory
@@ -125,9 +126,17 @@ class ProviderBoundaryTests(TestCase):
     def test_workflow_uses_injected_chat_provider_without_vendor_sdk(self) -> None:
         provider = FakeChatProvider(
             [
-                "CAN_ANSWER",
-                "DocChat uses a hybrid retriever.",
-                "Supported: YES\nUnsupported Claims: []\nContradictions: []\nRelevant: YES\nAdditional Details: grounded",
+                json.dumps({"decision": "CAN_ANSWER", "explanation": "grounded"}),
+                json.dumps({"draft_answer": "DocChat uses a hybrid retriever."}),
+                json.dumps(
+                    {
+                        "supported": True,
+                        "relevant": True,
+                        "unsupported_claims": [],
+                        "contradictions": [],
+                        "correction_feedback": "grounded",
+                    }
+                ),
             ]
         )
         workflow = AgentWorkflow(provider)
