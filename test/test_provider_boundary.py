@@ -1,8 +1,8 @@
 """Focused V1-C02 tests for the vendor-neutral provider boundary."""
 
 import json
-from pathlib import Path
 import os
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from langchain.schema import Document
 
+from agents.contracts import RelevanceResult, ResearchResult, VerificationResult
 from agents.workflow import AgentWorkflow
 from config.settings import Settings
 from providers.factory import build_runtime_providers
@@ -29,6 +30,19 @@ class FakeChatProvider:
     def generate(self, prompt: str, *, temperature: float, max_tokens: int) -> str:
         self.calls.append(
             {"prompt": prompt, "temperature": temperature, "max_tokens": max_tokens}
+        )
+        return next(self.responses)
+
+    def generate_structured(
+        self, prompt: str, *, schema: dict, temperature: float, max_tokens: int
+    ) -> str:
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "schema": schema,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
         )
         return next(self.responses)
 
@@ -96,6 +110,41 @@ class ProviderBoundaryTests(TestCase):
         model.bind.return_value.invoke.assert_called_once_with("prompt")
 
     @patch("providers.ollama.ChatOllama")
+    def test_ollama_structured_adapter_forwards_schema_and_disables_thinking(
+        self, chat_class: Mock
+    ) -> None:
+        model = chat_class.return_value
+        model.bind.return_value.invoke.return_value = SimpleNamespace(
+            content='{"decision":"CAN_ANSWER","explanation":"grounded"}'
+        )
+        schema = RelevanceResult.model_json_schema()
+        provider = OllamaChatProvider(model="chat-test", base_url="http://ollama.test:11434")
+
+        self.assertEqual(
+            provider.generate_structured(
+                "prompt", schema=schema, temperature=0.2, max_tokens=25
+            ),
+            '{"decision":"CAN_ANSWER","explanation":"grounded"}',
+        )
+        model.bind.assert_called_once_with(
+            format=schema,
+            think=False,
+            options={"temperature": 0.2, "num_predict": 25},
+        )
+
+    @patch("providers.ollama.ChatOllama")
+    def test_ollama_structured_adapter_rejects_empty_content(self, chat_class: Mock) -> None:
+        chat_class.return_value.bind.return_value.invoke.return_value = SimpleNamespace(
+            content="", thinking="untrusted reasoning"
+        )
+        provider = OllamaChatProvider(model="chat-test", base_url="http://ollama.test:11434")
+
+        with self.assertRaises(OllamaProviderError):
+            provider.generate_structured(
+                "prompt", schema=RelevanceResult.model_json_schema(), temperature=0, max_tokens=25
+            )
+
+    @patch("providers.ollama.ChatOllama")
     def test_ollama_chat_adapter_wraps_unavailable_service(self, chat_class: Mock) -> None:
         chat_class.return_value.bind.side_effect = OSError("connection refused")
         provider = OllamaChatProvider(model="chat-test", base_url="http://ollama.test:11434")
@@ -149,6 +198,14 @@ class ProviderBoundaryTests(TestCase):
         self.assertEqual(result["draft_answer"], "DocChat uses a hybrid retriever.")
         self.assertIn("**Supported:** YES", result["verification_report"])
         self.assertEqual(len(provider.calls), 3)
+        self.assertEqual(
+            [call["schema"] for call in provider.calls],
+            [
+                RelevanceResult.model_json_schema(),
+                ResearchResult.model_json_schema(),
+                VerificationResult.model_json_schema(),
+            ],
+        )
 
     def test_active_core_modules_do_not_import_ibm_or_openai_sdks(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

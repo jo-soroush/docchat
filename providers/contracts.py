@@ -1,6 +1,7 @@
 """Narrow vendor-neutral contracts consumed by DocChat core."""
 
-from typing import Protocol, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any, Protocol
 
 
 class ProviderError(RuntimeError):
@@ -12,6 +13,16 @@ class ChatProvider(Protocol):
 
     def generate(self, prompt: str, *, temperature: float, max_tokens: int) -> str:
         """Return generated text or raise a provider error."""
+
+    def generate_structured(
+        self,
+        prompt: str,
+        *,
+        schema: Mapping[str, Any],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """Return schema-constrained JSON text or raise a provider error."""
 
 
 class EmbeddingProvider(Protocol):

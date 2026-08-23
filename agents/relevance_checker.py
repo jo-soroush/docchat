@@ -35,7 +35,12 @@ CAN_ANSWER means the passages fully answer the question. PARTIAL means they disc
 Question: {question}
 Passages: {document_content}
 """
-        response_text = self.model.generate(prompt, temperature=0, max_tokens=100)
+        response_text = self.model.generate_structured(
+            prompt,
+            schema=RelevanceResult.model_json_schema(),
+            temperature=0,
+            max_tokens=100,
+        )
         result = RelevanceResult.from_model_json(response_text)
         logger.debug("Structured relevance decision: %s", result.decision.value)
         return result

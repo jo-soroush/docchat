@@ -27,8 +27,9 @@ Context: {context}
 
     def generate(self, question: str, documents: list[Document]) -> ResearchResult:
         context = build_citation_context(documents)
-        response_text = self.model.generate(
+        response_text = self.model.generate_structured(
             self.generate_prompt(question, context),
+            schema=ResearchResult.model_json_schema(),
             temperature=0.3,
             max_tokens=300,
         )

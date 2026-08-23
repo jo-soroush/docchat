@@ -1,8 +1,8 @@
 """Focused V1-C08 tests for safe, typed workflow run traces."""
 
 import json
-from uuid import UUID
 from unittest import TestCase
+from uuid import UUID
 
 from langchain.schema import Document
 
@@ -17,6 +17,10 @@ class FakeChatProvider:
     def generate(self, prompt: str, *, temperature: float, max_tokens: int) -> str:
         del prompt, temperature, max_tokens
         return next(self.responses)
+
+    def generate_structured(self, prompt: str, *, schema: dict, temperature: float, max_tokens: int) -> str:
+        del schema
+        return self.generate(prompt, temperature=temperature, max_tokens=max_tokens)
 
 
 class FakeRetriever:

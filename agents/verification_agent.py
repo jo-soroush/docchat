@@ -32,8 +32,9 @@ Context: {context}
 
     def check(self, answer: str, documents: list[Document]) -> VerificationResult:
         context = "\n\n".join(doc.page_content for doc in documents)
-        response_text = self.model.generate(
+        response_text = self.model.generate_structured(
             self.generate_prompt(answer, context),
+            schema=VerificationResult.model_json_schema(),
             temperature=0.0,
             max_tokens=200,
         )
