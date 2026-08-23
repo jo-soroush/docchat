@@ -1,6 +1,7 @@
 """Ollama implementation details; this module is the vendor boundary."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
@@ -25,9 +26,35 @@ class OllamaChatProvider(ChatProvider):
         except Exception as exc:
             raise OllamaProviderError("Ollama chat request failed.") from exc
 
+        return self._response_text(response)
+
+    def generate_structured(
+        self,
+        prompt: str,
+        *,
+        schema: Mapping[str, Any],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """Request native JSON-schema output without a model thinking channel."""
+        try:
+            response = self._model.bind(
+                format=dict(schema),
+                think=False,
+                options={"temperature": temperature, "num_predict": max_tokens},
+            ).invoke(prompt)
+        except Exception as exc:
+            raise OllamaProviderError("Ollama structured chat request failed.") from exc
+
+        return self._response_text(response)
+
+    @staticmethod
+    def _response_text(response) -> str:
         content = response.content
         if isinstance(content, str):
-            return content.strip()
+            text = content.strip()
+            if text:
+                return text
         raise OllamaProviderError("Ollama chat response did not contain text.")
 
 

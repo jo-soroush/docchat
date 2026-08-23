@@ -57,6 +57,12 @@ Core agents and retrieval use only `ChatProvider` and `EmbeddingProvider` from
 Ollama-specific client implementation; `providers/factory.py` composes it from
 `Settings`. Provider failure is expressed as `ProviderError`.
 
+For typed agent calls, `ChatProvider.generate_structured()` receives the
+agent-owned JSON schema rather than an Ollama type. The Ollama adapter applies
+its native schema `format` and disables its separate thinking channel, then the
+agent's existing strict Pydantic contract validates the returned JSON. The core
+does not parse model prose or provider-specific reasoning content.
+
 ### Workflow contracts and termination
 
 `agents/contracts.py` defines strict Pydantic contracts:

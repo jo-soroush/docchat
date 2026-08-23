@@ -36,6 +36,10 @@ class FixtureChatProvider:
         self.calls += 1
         return next(self._responses)
 
+    def generate_structured(self, prompt: str, *, schema: dict, temperature: float, max_tokens: int) -> str:
+        del schema
+        return self.generate(prompt, temperature=temperature, max_tokens=max_tokens)
+
 
 class FixtureRetriever:
     """Static retrieved evidence for one golden workflow case."""

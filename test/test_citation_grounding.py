@@ -24,6 +24,10 @@ class FakeChatProvider:
     def generate(self, prompt: str, *, temperature: float, max_tokens: int) -> str:
         return next(self.responses)
 
+    def generate_structured(self, prompt: str, *, schema: dict, temperature: float, max_tokens: int) -> str:
+        del schema
+        return self.generate(prompt, temperature=temperature, max_tokens=max_tokens)
+
 
 class FakeRetriever:
     def __init__(self, documents: list[Document]) -> None:

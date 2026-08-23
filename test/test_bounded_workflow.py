@@ -19,6 +19,10 @@ class FakeChatProvider:
         self.calls.append({"prompt": prompt, "temperature": temperature, "max_tokens": max_tokens})
         return next(self.responses)
 
+    def generate_structured(self, prompt: str, *, schema: dict, temperature: float, max_tokens: int) -> str:
+        del schema
+        return self.generate(prompt, temperature=temperature, max_tokens=max_tokens)
+
 
 class FakeRetriever:
     def __init__(self) -> None:

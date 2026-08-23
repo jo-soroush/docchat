@@ -1053,6 +1053,89 @@ V2-C01 can build an agentic source-routing boundary on a documented, reproducibl
 V1 baseline without confusing historical IBM provenance with active runtime
 dependencies. It must remain a separate, explicitly approved Card.
 
+## Post-V1 Maintenance — Ollama Structured-Output Compatibility
+**Status:** IMPLEMENTATION COMPLETE — awaiting human delivery approval. This is a
+bounded V1 maintenance fix, not a V2 Card.
+
+### Problem, Contract Map, and Decision
+
+Real local use with `qwen3.5:4b` reached C04 relevance routing but terminated
+as `FAILURE`: the model's Ollama thinking mode returned empty assistant
+`content` with a separate thinking channel. The original plain
+`ChatProvider.generate()` adapter discarded that channel and passed an empty
+string to strict `RelevanceResult.from_model_json()`, which correctly rejected
+it. C08/C09 safe terminal behavior was preserved.
+
+The provider boundary now owns schema transport while agents still own their
+Pydantic contracts:
+
+```text
+Relevance/Research/Verification agent → ChatProvider.generate_structured(prompt, schema)
+→ Ollama adapter (format=schema, think=false) → strict Pydantic validation
+```
+
+No free-text parsing, reasoning-channel parsing, provider SDK import in core,
+retrieval change, or model download was introduced.
+
+### Implementation
+
+- `providers/contracts.py`: adds vendor-neutral `generate_structured()` using a
+  JSON-schema mapping.
+- `providers/ollama.py`: uses native Ollama schema `format` and `think=False`
+  for structured calls; empty `content` remains a safe `ProviderError`.
+- `agents/relevance_checker.py`, `agents/research_agent.py`, and
+  `agents/verification_agent.py`: pass their existing `RelevanceResult`,
+  `ResearchResult`, and `VerificationResult` JSON schemas respectively.
+- Deterministic fake providers now implement the expanded boundary; no routing,
+  citation, retry, trace, or UI owner changed.
+- `docs/ARCHITECTURE.md`: records the structured provider boundary.
+
+### Actual Validation
+
+- Diagnosis: Ollama 0.31.2 / `qwen3.5:4b` prompt-only and schema-only requests
+  with thinking enabled returned empty `content`; strict Pydantic rejected it.
+- Native Ollama JSON schema plus `think:false`: PASS — returned C04-valid JSON.
+- Installed `langchain-ollama` `ChatOllama(format=schema).bind(think=False)`:
+  PASS — returned C04-valid JSON.
+- Focused provider boundary tests: PASS — 12/12, including schema forwarding,
+  thinking disabled, empty-content rejection, injected agent schemas, and
+  retained vendor-import guard.
+- C04 structured-contract tests: PASS — 6/6.
+- C09 robust-failure tests: PASS — 8/8.
+- Real local synthetic workflow with `qwen3.5:4b`: PASS — retrieval,
+  relevance, research, verification, citation, trace, and `VERIFIED` terminal
+  outcome without retries.
+- Temporary real document flow: PASS — Markdown ingestion, provenance-aware
+  chunking, Qwen embeddings, temporary Chroma + BM25 hybrid retrieval, typed
+  agents, citation, verification, and `VERIFIED` terminal outcome. Temporary
+  source/cache/Chroma data was removed after the run.
+- Full deterministic suite: PASS — 65/65.
+- C06 retrieval runner: PASS — BM25/vector/hybrid Hit Rate@3 and mean Recall@3
+  each 1.00 on the controlled fixture.
+- C07 answer/verification runner: PASS — 10/10 workflow cases.
+- `pip check`, compilation, and active IBM/Watsonx/OpenAI SDK import scan: PASS.
+- Scoped Ruff check for the modified provider/agent/fake-provider files: PASS.
+  A repository-wide Ruff run still reports 30 pre-existing violations in
+  unrelated legacy files (including `app.py`, `agents/workflow.py`, and the
+  retained `test/test1.py` diagnostic); this maintenance fix neither introduced
+  nor broadens scope to repair them.
+
+### Professional Lesson and Student Takeaway
+
+"Return JSON" in a prompt is not a transport contract. Reasoning-capable local
+models may separate visible answer content from hidden/thinking content. A
+provider boundary should request the provider's native constrained-output mode,
+while strict domain validation remains the final authority. This fixes a local
+runtime compatibility defect without teaching agents about Ollama or weakening
+safe failure behavior.
+
+### Maintenance Exit Proof
+
+The known Qwen thinking-channel failure is resolved through the existing
+provider boundary; C04 schemas remain strict; C08/C09 failures remain explicit;
+real local structured flow and all relevant deterministic/evaluation regressions
+pass. No V2 work has started.
+
 ---
 
 # V2 Evidence
