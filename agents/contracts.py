@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 class StructuredOutputError(ValueError):
@@ -73,11 +73,27 @@ class SourceCitation(StrictAgentResult):
 
 
 class VerificationResult(StrictAgentResult):
+    """Verification control state for the supplied question, answer, and evidence.
+
+    ``supported`` means every factual claim in the answer is supported by the
+    supplied evidence.  A report cannot claim that while also listing an
+    unsupported claim or an evidence contradiction.
+    """
+
     supported: bool
     relevant: bool
     unsupported_claims: list[str]
     contradictions: list[str]
     correction_feedback: str
+
+    @model_validator(mode="after")
+    def supported_reports_cannot_list_evidence_failures(self):
+        """Reject a deterministic contradiction in model control state."""
+        if self.supported and (self.unsupported_claims or self.contradictions):
+            raise ValueError(
+                "A supported verification result cannot list unsupported claims or contradictions."
+            )
+        return self
 
     @property
     def requires_research(self) -> bool:

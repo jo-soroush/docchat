@@ -47,8 +47,13 @@ cache, and partial-upload failures.
 
 `RetrieverBuilder` creates a Chroma vector store from the injected
 `EmbeddingProvider`, a BM25 retriever, and a LangChain weighted `EnsembleRetriever`
-(`0.4` BM25, `0.6` vector by default). C06 evaluates all three modes at the same
-K without claiming the small fixture proves hybrid superiority.
+(`0.4` BM25, `0.6` vector by default). C05 `chunk_id` is the Chroma record ID,
+so re-ingesting the same chunk upserts rather than duplicates it. The configured
+collection is explicit, and vector searches are filtered to the active upload's
+`document_id` values; BM25 is built from that same active document set. Legacy
+default-collection data is left untouched and is not queried by the scoped
+collection. C06 evaluates all three modes at the same K without claiming the
+small fixture proves hybrid superiority.
 
 ### Provider boundary
 
@@ -60,8 +65,10 @@ Ollama-specific client implementation; `providers/factory.py` composes it from
 For typed agent calls, `ChatProvider.generate_structured()` receives the
 agent-owned JSON schema rather than an Ollama type. The Ollama adapter applies
 its native schema `format` and disables its separate thinking channel, then the
-agent's existing strict Pydantic contract validates the returned JSON. The core
-does not parse model prose or provider-specific reasoning content.
+agent's existing strict Pydantic contract validates the returned JSON. A
+length-stopped structured completion becomes a safe provider failure before any
+partial JSON reaches Pydantic. The core does not parse model prose or
+provider-specific reasoning content.
 
 ### Workflow contracts and termination
 

@@ -162,8 +162,14 @@ class ProviderBoundaryTests(TestCase):
 
     def test_hybrid_retriever_keeps_bm25_and_vector_retrieval(self) -> None:
         documents = [
-            Document(page_content="DocChat preserves hybrid retrieval."),
-            Document(page_content="Ollama runs locally."),
+            Document(
+                page_content="DocChat preserves hybrid retrieval.",
+                metadata={"document_id": "docchat", "chunk_id": "docchat-hybrid"},
+            ),
+            Document(
+                page_content="Ollama runs locally.",
+                metadata={"document_id": "ollama", "chunk_id": "ollama-local"},
+            ),
         ]
         with TemporaryDirectory() as temporary_directory:
             config = Settings(_env_file=None, CHROMA_DB_PATH=temporary_directory, VECTOR_SEARCH_K=2)

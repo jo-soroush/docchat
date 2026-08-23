@@ -47,11 +47,18 @@ class RetrieverBuilder:
     def _build_modes(self, docs, *, bm25_k: int, vector_k: int) -> RetrievalModes:
         """Construct all retrieval modes while keeping their common ownership here."""
         try:
-            # Create Chroma vector store
+            chunk_ids, document_ids = self._stable_vector_identity(docs)
+
+            # The stable C05 chunk ID is the Chroma record ID. Re-ingestion therefore
+            # upserts the same logical record instead of accumulating duplicates.
+            # The configured collection deliberately separates this scoped format
+            # from legacy default-collection data without deleting it.
             vector_store = Chroma.from_documents(
                 documents=docs,
                 embedding=self.embeddings,
-                persist_directory=self.config.CHROMA_DB_PATH
+                ids=chunk_ids,
+                collection_name=self.config.CHROMA_COLLECTION_NAME,
+                persist_directory=self.config.CHROMA_DB_PATH,
             )
             logger.info("Vector store created successfully.")
             
@@ -60,7 +67,12 @@ class RetrieverBuilder:
             logger.info("BM25 retriever created successfully.")
             
             # Create vector-based retriever
-            vector_retriever = vector_store.as_retriever(search_kwargs={"k": vector_k})
+            vector_retriever = vector_store.as_retriever(
+                search_kwargs={
+                    "k": vector_k,
+                    "filter": {"document_id": {"$in": document_ids}},
+                }
+            )
             logger.info("Vector retriever created successfully.")
             
             # Combine retrievers into a hybrid retriever
@@ -77,3 +89,23 @@ class RetrieverBuilder:
         except Exception as exc:
             logger.error("Failed to build hybrid retriever.")
             raise RetrievalError("Document retrieval could not be initialized.") from exc
+
+    @staticmethod
+    def _stable_vector_identity(docs) -> tuple[list[str], list[str]]:
+        """Return existing C05 IDs required for idempotent, scoped vector storage."""
+        chunk_ids: list[str] = []
+        document_ids: list[str] = []
+        for document in docs:
+            metadata = document.metadata or {}
+            chunk_id = metadata.get("chunk_id")
+            document_id = metadata.get("document_id")
+            if not isinstance(chunk_id, str) or not chunk_id:
+                raise ValueError("Every vector document must have a stable chunk_id.")
+            if not isinstance(document_id, str) or not document_id:
+                raise ValueError("Every vector document must have a stable document_id.")
+            if chunk_id in chunk_ids:
+                raise ValueError("Vector document chunk_id values must be unique.")
+            chunk_ids.append(chunk_id)
+            if document_id not in document_ids:
+                document_ids.append(document_id)
+        return chunk_ids, document_ids
