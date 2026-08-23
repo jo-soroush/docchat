@@ -260,7 +260,9 @@ class AgentWorkflow:
     def _verification_step(self, state: AgentState) -> dict:
         stage_started_at = perf_counter()
         try:
-            result = self.verifier.check(state["draft_answer"], state["documents"])
+            result = self.verifier.check(
+                state["question"], state["draft_answer"], state["documents"]
+            )
         except StructuredOutputError as exc:
             return self._structured_failure(
                 state,

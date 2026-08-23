@@ -1138,6 +1138,351 @@ pass. No V2 work has started.
 
 ---
 
+## Post-V1 Maintenance Hotfix A — Chroma Identity and Active-Upload Scoping
+**Status:** READY FOR HUMAN DELIVERY REVIEW — Exit Gate and Hotfix A Quality Gate evidenced. This is a bounded V1 maintenance fix, not Hotfix B or a V2 Card.
+
+### Problem, Contract Map, and Risk Map
+
+Real local use showed that `RetrieverBuilder` wrote every ingestion through
+`Chroma.from_documents()` without record IDs, collection ownership, or a current
+document metadata filter. Repeating an upload therefore created duplicate vector
+records, and the shared persistent default collection could return stale or
+unrelated source chunks. BM25 was already built from the active in-memory chunks,
+but the vector side of the C02 hybrid boundary was not session-scoped.
+
+Ownership remains deliberately narrow:
+
+```text
+DocumentProcessor → stable document_id / chunk_id metadata
+RetrieverBuilder → Chroma record identity + collection + active-document filter
+BM25 → active in-memory documents
+EnsembleRetriever → unchanged 0.4 / 0.6 hybrid composition
+Citations → metadata from the retrieved current evidence
+```
+
+Risks inspected: inventing a second identity system; silently deleting a user's
+persisted store; mixing legacy records into current retrieval; altering scoring,
+K, provider contracts, workflow routing, citations, or Hotfix B synthesis
+semantics. None are part of this change.
+
+### Implementation
+
+- `RetrieverBuilder._stable_vector_identity()` requires the existing C05 stable
+  `chunk_id` and `document_id` metadata. The former is used as Chroma's record
+  ID; duplicate logical IDs fail deterministically within one input set.
+- `Chroma.from_documents()` now receives those record IDs and the existing,
+  configurable `CHROMA_COLLECTION_NAME`. Repeated ingestion upserts the same
+  IDs instead of creating another logical vector record.
+- Vector retrieval applies a Chroma `$in` metadata filter over only the current
+  active `document_id` values. BM25 continues to be constructed only from that
+  same active upload list; hybrid weights and K are unchanged.
+- `.env.example`, `README.md`, and `docs/ARCHITECTURE.md` document the explicit
+  collection boundary. The default `documents` collection is separate from the
+  historical LangChain default `langchain` collection used by the old builder.
+
+### Existing-Data Compatibility Boundary
+
+No user data is deleted, reset, or migrated automatically. Existing legacy
+records in the old default collection remain on disk as provenance/data but are
+not queried by the new explicit `documents` collection. Current uploads are
+written with stable identity and scope metadata into the configured collection.
+If a user explicitly points `CHROMA_COLLECTION_NAME` at a legacy collection,
+records lacking current `document_id` metadata are naturally excluded by the
+active-document filter; they can only become usable through a separately
+approved, controlled rebuild/migration.
+
+### Actual Validation So Far
+
+- `venv/bin/python -m unittest discover -s test -p 'test_chroma_scoping.py' -v`:
+  PASS — 6/6 deterministic temporary-store tests prove stable IDs, idempotent
+  repeat ingestion, vector/hybrid inactive-document exclusion, multi-document
+  eligibility, BM25 active scope, citation metadata preservation, and controlled
+  rejection of identity-free legacy input at the retrieval boundary.
+- `venv/bin/python -m unittest discover -s test -p 'test_provider_boundary.py' -v`:
+  PASS — 12/12 C02/hotfix provider and hybrid regression tests.
+- `venv/bin/python -m evaluation.run_retrieval_evaluation`: PASS — C06 BM25,
+  vector, and hybrid each retain Hit Rate@3 `1.00` and mean Recall@3 `1.00` on
+  four scoreable controlled cases.
+- Real local Ollama validation with existing Ollama `0.31.2` and
+  `qwen3-embedding:0.6b`: PASS in a temporary Chroma directory. Two synthetic
+  chunks ingested twice produced collection count `2` with their two stable
+  IDs; active A retrieval returned only A through vector, BM25, and hybrid;
+  active A+B vector retrieval made both documents eligible. No model download
+  and no real user store modification occurred.
+- `venv/bin/python -m unittest discover -s test -v`: PASS — 71/71 deterministic
+  tests. This preserves C02 provider/hybrid, C03 bounded-loop, C04 structured
+  routing, C05 citation, C06 retrieval evaluation, C07 answer/verification,
+  C08 trace, C09 failure, C10 product, C11 documentation, and prior structured
+  Ollama hotfix coverage.
+- `venv/bin/python -m evaluation.run_answer_verification_evaluation`: PASS —
+  all 10 C07 workflow cases passed; its embedded C06 retrieval results remain
+  Hit Rate@3 and mean Recall@3 `1.00` for BM25, vector, and hybrid.
+- `venv/bin/python -m pip check`: PASS — no broken requirements found.
+- `venv/bin/python -m compileall -q agents app.py config document_processor
+  evaluation product providers retriever test utils`: PASS.
+- Active IBM/Watsonx/OpenAI runtime import scan: PASS — no production import.
+
+### Learning Record
+
+**What we built / why:** a persistent vector store needs deterministic record
+identity and explicit retrieval scope. Otherwise an application can appear to
+retrieve relevant text while quietly mixing old uploads or duplicate vectors.
+
+**Professional lesson:** metadata used for citations is also an operational
+integrity boundary. Reusing C05's `chunk_id`/`document_id` avoids competing
+identity schemes and lets storage idempotency, session isolation, retrieval, and
+provenance reinforce one another.
+
+**Student takeaway:** persistence does not mean every stored document belongs in
+every query. Give records stable IDs, define collection ownership, and filter
+retrieval to the data the user actually selected.
+
+### Exit Gate Proof
+
+- **Deterministic vector identity:** the current C05 `chunk_id` is passed as the
+  Chroma record ID; repeat-ingestion tests and real Ollama temporary validation
+  prove count/identity remain stable.
+- **Active-document isolation:** vector, BM25, and hybrid tests prove a stored
+  inactive document B cannot be returned when only A is active; active A+B
+  retrieval admits both sources.
+- **Hybrid and citation preservation:** unchanged weights/K, C06 metrics, and
+  citation metadata tests prove the existing hybrid/provenance path remains
+  intact.
+- **Safe existing-data handling:** the legacy default collection is neither
+  deleted nor reset. The explicit scoped collection avoids querying it; legacy
+  records require a separately approved migration only if reuse is desired.
+- **Regression proof:** 71/71 full deterministic tests, C06/C07 runners,
+  dependency health, compilation, and vendor-runtime scan pass.
+
+### HOTFIX_A_QUALITY_GATE
+
+**Status: PASS — ready for human delivery approval.**
+
+- Stable identity, idempotent repeat ingestion, active filtering, hybrid/citation
+  preservation, and no automatic user-data deletion: PASS.
+- Focused tests: PASS — 6/6. Full deterministic suite: PASS — 71/71.
+- C06 retrieval and C07 answer/verification evaluations: PASS.
+- Real local Ollama temporary validation: PASS — existing models only; no user
+  Chroma database, cache, document, or model download was touched.
+- Remaining limitation: old data is intentionally retained but not migrated;
+  Hotfix B document-wide product-operation semantics remains explicitly deferred.
+- Diff/state/artifact review: PASS — `git diff --check` passes for tracked
+  changes and the new focused test; the intended files are the retriever,
+  non-secret configuration/docs, C02 fixture update, Hotfix A focused test, and
+  evidence. Existing untracked `.gradio/`, `:memory:.ses`, and user document
+  cache files predated Hotfix A, were not modified, and are not included in any
+  delivery. `.env` remains ignored and untracked.
+
+---
+
+## Post-V1 Maintenance — Bounded Verification Structured Output
+**Status:** READY FOR HUMAN DELIVERY REVIEW — verification-output Exit Gate and Quality Gate evidenced. This is a bounded V1 maintenance fix, not Hotfix B or a V2 Card.
+
+### Problem, Contract Map, and Decision
+
+Real Gradio use reached retrieval, typed relevance, typed research, and C05
+citation mapping, then failed at verification with malformed JSON. The verified
+cause was not Qwen thinking: native JSON schema plus `think=False` was already
+working. `VerificationAgent` allowed only `max_tokens=200`; Qwen could reach
+Ollama `done_reason='length'` before closing a valid `VerificationResult` JSON
+object. Strict Pydantic correctly rejected that incomplete output.
+
+```text
+VerificationAgent (bounded 300-token structured request)
+→ ChatProvider.generate_structured(schema)
+→ Ollama format=schema + think=False
+→ done_reason == length ? safe ProviderError : visible JSON text
+→ strict VerificationResult validation
+```
+
+The agent owns its bounded output budget. The Ollama provider owns provider
+completion metadata. Pydantic remains the domain/schema authority. C08/C09 own
+the safe terminal route for a `ProviderError`; no partial JSON, prose, or
+thinking content is parsed.
+
+### Implementation
+
+- `agents/verification_agent.py`: raises the bounded verification structured
+  generation limit from `200` to `300` tokens. Relevance remains at `100` and
+  research remains at `300`.
+- `providers/ollama.py`: checks only response completion metadata. A structured
+  `done_reason == 'length'` raises the generic
+  `OllamaProviderError("Ollama structured response exceeded its generation limit.")`
+  before content is returned to Pydantic.
+- `test/test_verification_output.py`: proves the verification budget, valid
+  validation, strict malformed rejection, safe length-stop failure without raw
+  content exposure, and unchanged relevance/research schemas and budgets.
+- `docs/ARCHITECTURE.md`: documents that a length-stopped structured completion
+  fails before partial JSON is parsed.
+
+### Actual Validation
+
+- `venv/bin/python -m unittest discover -s test -p 'test_verification_output.py' -v`:
+  PASS — 5/5 focused tests.
+- C02 provider boundary: PASS — 12/12. C04 structured contracts: PASS — 6/6.
+  C08 run trace: PASS — 4/4. C09 robust failures: PASS — 8/8. Hotfix A Chroma
+  scoping: PASS — 6/6.
+- Full deterministic suite: PASS — 76/76, preserving C02–C11, Hotfix A, and the
+  prior Ollama structured-output hotfix.
+- C06 retrieval evaluation: PASS — unchanged BM25/vector/hybrid Hit Rate@3 and
+  mean Recall@3 `1.00` over four scoreable cases.
+- C07 answer/verification evaluation: PASS — 10/10 workflow cases.
+- `pip check`, Python compilation, and `git diff --check`: PASS.
+- Real local synthetic Qwen probe using existing Ollama `0.31.2` and
+  `qwen3.5:4b`: PASS. A deliberately long verification request at 200 tokens
+  ended at the provider limit and produced only the generic safe provider error.
+  The same request through `VerificationAgent` at 300 tokens returned a strict
+  valid result with `supported=False`, `relevant=True`, 24 unsupported claims,
+  one contradiction, and non-empty feedback. No user document content, raw
+  generated response, model download, or user data was used.
+
+### Learning Record
+
+**Professional lesson:** native structured output guarantees neither infinite
+generation nor a complete response. Completion metadata is part of a provider
+contract. Detect an incomplete generation before domain validation, retain a
+bounded stage-specific output budget, and keep raw content out of user-facing
+errors and traces.
+
+**Student takeaway:** schema validation tells you whether a response is safe to
+use; provider completion status tells you whether the response had a chance to
+finish. You need both checks in a reliable agent workflow.
+
+### HOTFIX_VERIFICATION_QUALITY_GATE
+
+**Status: PASS — ready for human delivery approval.**
+
+- Verification has a measured bounded budget that completes the reproduced Qwen
+  case: PASS.
+- Length-stopped responses become safe provider failures before Pydantic: PASS.
+- Strict Pydantic, native schema, `think=False`, no partial/prose/thinking
+  parsing, C03 retries, C05 citations, C08 traces, C09 failures, and Hotfix A
+  retrieval scoping: PASS through focused and full regressions.
+- Hotfix B and V2 work: NOT STARTED.
+
+---
+
+## Post-V1 Maintenance — Question-Aware Verification Semantics
+**Status:** PASS — automated and real Gradio validation complete; ready for human delivery approval. This is a narrowly scoped V1 maintenance hotfix, not Hotfix B or V2 work.
+
+### Problem, Contract Map, and Risk Map
+
+Real Gradio testing showed a supported, scoped answer to “what are the three
+stages of the agent loop?” could be rejected as `relevant=false`. The answer
+and its `KEY TAKEAWAYS` citation supported “perceive, reason, and act,” but the
+model introduced an external “observe” requirement and the existing C03 budget
+correctly ended at `RETRY_EXHAUSTED`.
+
+The inspected path was:
+
+```text
+question in AgentState → ResearchAgent(question, retrieved evidence)
+                         → VerificationAgent(answer, retrieved evidence)  [before]
+                         → typed VerificationResult → unchanged C03 route
+```
+
+The verifier did not receive the original question. Its prompt said only to
+judge whether an answer was “supported and relevant to provided context,” so
+the model could confuse question relevance with broad-context completeness.
+The verifier receives the current hybrid evidence set rather than a citation
+display string. Diagnostics found the exact agent-loop section and cited key
+takeaways in that set; none of the ten retrieved chunks contained the literal
+term `observe`. The model therefore supplied that requirement from outside the
+provided evidence.
+
+Risks considered: weakening strict C04 validation; letting prose control C03
+routing; changing the retry budget; making retries correction-guided; changing
+Hotfix A retrieval scoping; or adding external knowledge/citation parsing. All
+are out of scope.
+
+### Implementation
+
+- `agents/workflow.py`: passes the existing `AgentState.question` to the
+  verifier. C03 retry count, routes, and terminal states are unchanged.
+- `agents/verification_agent.py`: `check(question, answer, documents)` now
+  defines `supported`, `relevant`, `contradictions`, and `unsupported_claims`
+  against the exact question and supplied evidence. It explicitly forbids
+  external/model knowledge and broad-context completeness requirements.
+- `agents/contracts.py`: keeps strict Pydantic output and adds the safe
+  invariant that a report marked `supported=true` cannot also list unsupported
+  claims or evidence contradictions. A genuinely supported but irrelevant
+  answer remains a valid, retry-requiring state.
+- `test/test_verification_semantics.py`: adds deterministic tests for the
+  three-stage scoped case, question handoff, `VERIFIED` routing, unsupported
+  and irrelevant failures, evidence-only contradiction instructions, and the
+  new deterministic invariant.
+- `test/test_verification_output.py`: updates direct verifier calls to the
+  explicit question-aware boundary while retaining the 300-token and
+  length-stop protections.
+
+Correction-feedback-guided re-research is deliberately not implemented: C03
+still preserves its existing bounded re-research behavior, and feedback remains
+available only as structured verification output for a separately approved
+future improvement.
+
+### Actual Validation
+
+- `venv/bin/python -m unittest discover -s test -p 'test_verification_semantics.py' -v`:
+  PASS — 6/6 focused semantic tests.
+- Structured-output protection: PASS — `test_verification_output.py` 5/5.
+  C04 structured contracts: PASS — 6/6. C03 bounded loop: PASS — 8/8.
+- C08 safe run trace: PASS — 4/4. C09 robust failures: PASS — 8/8. Hotfix A
+  Chroma identity/scoping: PASS — 6/6. C02 provider boundary: PASS — 12/12.
+- Full deterministic suite: PASS — 82/82.
+- C06 retrieval evaluation: PASS — BM25, vector, and hybrid retain Hit Rate@3
+  and mean Recall@3 `1.00` over four scoreable fixture cases.
+- C07 answer/verification evaluation: PASS — 10/10 workflow cases.
+- `pip check`, Python compilation, and `git diff --check`: PASS.
+- Manual real Gradio validation: PASS — uploaded
+  `MachineLearning_ir - Agentic AI.pdf`; operation `Ask`; question “According
+  to the document, what are the three stages of the agent loop?” returned
+  “The three stages of the agent loop are perceive, reason, and act.”
+  Verification reported `Supported: YES`, no unsupported claims, no
+  contradictions, `Relevant: YES`, and no additional details. The source
+  citation resolved to the uploaded PDF's `KEY TAKEAWAYS` chunk. No structured
+  output failure or `RETRY_EXHAUSTED` occurred.
+
+### Learning Record
+
+**Professional lesson:** a typed result is only reliable when its fields have
+precise inputs and semantics. “Relevant to context” is not equivalent to
+“answers the user’s question.” Carry the question through every decision stage,
+state what evidence the model may use, and enforce only invariants that are
+deterministically true from the contract itself.
+
+**Student takeaway:** structured JSON prevents format mistakes, but it cannot
+by itself prevent a model from applying the wrong meaning. Good agent contracts
+need both a schema and clear definitions of what each control field means.
+
+### Current Exit Proof and Remaining Gate
+
+- Scoped answer semantics: deterministic three-stage fixture receives the exact
+  question and evidence-only instructions; a `supported=true`,
+  `relevant=true` result routes to `VERIFIED` with zero retries.
+- Genuine failures: deterministic unsupported and irrelevant results still set
+  `requires_research=true`; C03 retry/exhaustion regressions remain green.
+- Inconsistent positive results: strict Pydantic rejects `supported=true` with
+  an unsupported-claim or contradiction list.
+- Architecture preservation: C02 provider/Ollama, Hotfix A retrieval scoping,
+  C04 typing, C05 citations, C08 safe traces, C09 failures, and the verification
+  length-stop protection all pass their relevant regressions.
+- Real application validation: the reproduced uploaded-PDF Ask flow passed
+  with the expected verified answer and grounded citation. No real user
+  document was used by the automated tests; the manual run is recorded above.
+
+### HOTFIX_VERIFICATION_SEMANTICS_QUALITY_GATE
+
+**Status: PASS — ready for human delivery approval.**
+
+- Focused and full deterministic tests: PASS.
+- C06/C07 evaluations, dependency health, compilation, and diff check: PASS.
+- Manual real Gradio Ask validation: PASS — question-aware verification
+  correctly accepted the scoped, source-grounded three-stage answer.
+- Hotfix B, correction-guided re-research, V2-C01, commit, push, PR, and merge:
+  NOT STARTED.
+
+---
+
 # V2 Evidence
 
 All V2 Cards are **BLOCKED / NOT STARTED** until V1 foundations and their required dependencies are closed with verified evidence.

@@ -70,6 +70,8 @@ boundary is `config/settings.py`.
 | `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model used by vector retrieval. |
 | `GRADIO_SERVER_PORT` | `7860` | Local Gradio port; validated from 1–65535. |
 | `MAX_VERIFICATION_RETRIES` | `2` | Allowed re-research attempts after failed verification; validated from 0–5. |
+| `CHROMA_DB_PATH` | `./chroma_db` | Local persistent vector-store directory. |
+| `CHROMA_COLLECTION_NAME` | `documents` | Explicit vector collection for stable, active-upload-scoped records. |
 
 These values are configuration, not credentials. There is no active IBM,
 Watsonx, or OpenAI runtime configuration in V1.

@@ -46,7 +46,17 @@ class OllamaChatProvider(ChatProvider):
         except Exception as exc:
             raise OllamaProviderError("Ollama structured chat request failed.") from exc
 
+        if self._structured_response_was_truncated(response):
+            raise OllamaProviderError(
+                "Ollama structured response exceeded its generation limit."
+            )
         return self._response_text(response)
+
+    @staticmethod
+    def _structured_response_was_truncated(response) -> bool:
+        """Recognize a provider completion limit without inspecting generated content."""
+        metadata = getattr(response, "response_metadata", None)
+        return isinstance(metadata, Mapping) and metadata.get("done_reason") == "length"
 
     @staticmethod
     def _response_text(response) -> str:
