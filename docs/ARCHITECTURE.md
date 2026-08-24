@@ -16,10 +16,11 @@ adapters and are not imported by the core.
 
 ```text
 Gradio UI (`app.py`)
-  ├─ `product/operations.py`: validate study operation and construct request
+  ├─ `product/operations.py`: validate study operation and construct typed request
   ├─ `DocumentProcessor`: file validation, SHA-256 cache key, Docling conversion,
   │   Markdown header chunking, provenance attachment, deduplication
   └─ `RetrieverBuilder`: Chroma vector retrieval + BM25 + weighted ensemble
+       → bounded active-document evidence collector for synthesis/comparison
        ↓
   `AgentWorkflow` (LangGraph)
     retrieval → relevance → research → verification → route / terminal
@@ -33,9 +34,12 @@ Gradio UI (`app.py`)
 
 `app.py` owns Gradio controls, example loading, and session-level retriever reuse.
 It does not retrieve, generate, verify, route, or format citations itself.
-`product/operations.py` turns the six C10 operations into ordinary questions and
-calls `AgentWorkflow.full_pipeline()` once. It returns the backend result without
-changing terminal outcome, retry count, citations, or trace.
+`product/operations.py` validates each operation, creates an `OperationRequest`,
+and calls `AgentWorkflow.full_pipeline()` once. Its typed `EvidenceIntent` is
+`QUESTION` for Ask/Explain Concept, `DOCUMENT_SYNTHESIS` for Summarize/Key
+Points/Generate Study Questions, and `MULTI_DOCUMENT_COMPARISON` for Compare
+Sources. The product adapter does not implement retrieval, citation resolution,
+verification, retries, or tracing.
 
 ### Documents and retrieval
 
@@ -54,6 +58,16 @@ collection is explicit, and vector searches are filtered to the active upload's
 default-collection data is left untouched and is not queried by the scoped
 collection. C06 evaluates all three modes at the same K without claiming the
 small fixture proves hybrid superiority.
+
+For `QUESTION`, the evidence wrapper delegates to this unchanged hybrid query
+path. For `DOCUMENT_SYNTHESIS`, it selects at most
+`SYNTHESIS_EVIDENCE_MAX_CHUNKS` evenly spaced chunks from active source
+documents within one total bounded budget. For `MULTI_DOCUMENT_COMPARISON`, it
+requires at least two active `document_id` values and samples each participating
+source under the same budget, so one source cannot silently dominate. These
+paths preserve the same C05 chunk metadata used by deterministic citation
+resolution; they do not query inactive persisted documents or feed an
+unrestricted corpus to the model.
 
 ### Provider boundary
 

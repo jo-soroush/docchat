@@ -1483,6 +1483,491 @@ need both a schema and clear definitions of what each control field means.
 
 ---
 
+## V1 Maintenance Hotfix B — Product Evidence Semantics
+**Status:** PASS — the final repeated real Compare Sources gate passed after
+the bounded verification output calibration.
+
+### Problem and Contract Map
+
+Manual V1 use showed that the C10 adapter converted every operation into a
+string-only question. Empty-focus Summarize therefore became “Summarize the
+uploaded document(s).” and followed ordinary hybrid top-K fact-question
+retrieval plus question relevance. That path can correctly return typed
+`NO_MATCH`, but it is the wrong evidence contract for document-wide synthesis.
+
+Hotfix B introduces the inspected ownership boundary:
+
+```text
+product/operations.py → OperationRequest(operation, EvidenceIntent, question)
+QUESTION → unchanged hybrid query retrieval → model relevance
+DOCUMENT_SYNTHESIS → bounded active-document samples → deterministic sufficiency
+MULTI_DOCUMENT_COMPARISON → balanced ≥2-source samples → deterministic sufficiency
+all paths → existing research → C05 citations → question-aware verification → C03 route
+```
+
+`QUESTION` remains for Ask/Explain Concept. Summarize, Key Points, and Generate
+Study Questions use `DOCUMENT_SYNTHESIS`; Compare Sources uses
+`MULTI_DOCUMENT_COMPARISON` and fails safely before generation when fewer than
+two active documents are present. The retriever owns sampling; the product
+adapter only validates/maps intent; no second backend is introduced.
+
+### Implemented, Deterministically Validated Work
+
+- `retriever/evidence.py` adds typed `EvidenceIntent`, bounded
+  `ActiveDocumentEvidenceRetriever`, deterministic evenly spaced samples, and
+  safe comparison/source-identity errors.
+- `RetrieverBuilder` wraps the existing hybrid retriever with that collector;
+  QUESTION still delegates to the established `invoke()` path.
+- `OperationRequest` preserves operation and intent through workflow state;
+  `AgentWorkflow` uses deterministic active-evidence sufficiency for synthesis
+  rather than fact-question relevance.
+- Comparison evidence uses active C05 metadata and balanced per-source sampling;
+  citations still resolve only against the collected active chunks.
+- Focused product/evidence tests: PASS — 6/6. C10 product tests: PASS — 6/6.
+  Hotfix A scoping: PASS — 6/6. Verification-output: PASS — 5/5.
+  Verification-semantics: PASS — 6/6.
+- Full deterministic suite: PASS — 89/89. C06 retrieval runner and C07
+  answer/verification runner: PASS. `pip check`, compilation, active
+  IBM/Watsonx/OpenAI runtime import scan, and `git diff --check`: PASS.
+
+### Required Real Gradio Validation Result
+
+An isolated local Gradio server on temporary port `7861` loaded the cached
+`MachineLearning_ir - Agentic AI.pdf` successfully (`374` unique chunks) and
+ran the real empty-focus Summarize endpoint using already-installed models. The
+result did **not** show `Supported: YES` or `Relevant: YES`; its citation report
+did not resolve to the uploaded Agentic AI source. It did not show
+`RETRY_EXHAUSTED`, but it also did not meet the required grounded synthesis
+success criterion.
+
+This is a real Exit-Gate failure. No prompt, model, retrieval-weight, or
+evaluation tuning was performed to hide it. Key Points, Study Questions, and
+two-source comparison were not run after this failed required gate. The
+temporary validation server was shut down cleanly. Hotfix B remains blocked
+pending a separate diagnosis and explicit approval for any corrective work.
+
+### Subsequent Runtime Diagnosis and Final Validation
+
+The first real validation exposed genuine local-runtime constraints rather than
+a reason to weaken grounding: positional evidence sampling omitted early
+sections; structured research output could exceed the available context; and
+the local Ollama runtime defaulted to a 4096-token context window. The bounded
+selector was made section-aware while retaining its 12-chunk cap, and the
+existing settings → Ollama-adapter boundary now exposes the non-secret,
+validated `OLLAMA_CONTEXT_WINDOW` setting (1024–65536; local default 8192).
+Only the Ollama adapter translates it to `num_ctx`; agents remain provider
+neutral.
+
+Final real local Gradio validation used the uploaded
+`MachineLearning_ir - Agentic AI.pdf`, empty-focus **Summarize**,
+`qwen3.5:4b`, `qwen3-embedding:0.6b`, `OLLAMA_CONTEXT_WINDOW=8192`, Research
+budget 1500, and Verification budget 300. It produced an answer and active-PDF
+citations; the typed verification report was `Supported: YES`, `Relevant: YES`,
+with no unsupported claims, contradictions, or correction feedback. A safe
+non-persistent probe of the same configuration recorded research
+`done_reason=stop`, `prompt_eval_count=3416`, `eval_count=1095`, followed by
+verification `done_reason=stop`, `prompt_eval_count=2856`, `eval_count=42`;
+both had content and no thinking-channel content. The terminal outcome was
+`VERIFIED`. No raw document, prompt, model output, or thinking content was
+recorded.
+
+Final automated evidence after the context setting:
+
+- Focused provider/configuration: PASS — 14/14; focused evidence-selection:
+  PASS — 9/9; research-capacity: PASS — 4/4; Hotfix A scoping: PASS — 6/6;
+  verification-output: PASS — 5/5; verification semantics: PASS — 6/6;
+  task-aware verification: PASS — 6/6; control consistency: PASS — 6/6; C10
+  product operations: PASS — 6/6.
+- Full deterministic suite: PASS — 110/110.
+- C06 retrieval runner and C07 answer/verification runner: PASS.
+- `pip check`, Python compilation, and `git diff --check`: PASS.
+- Chroma telemetry messages remained non-blocking environment noise; they did
+  not affect the successful retrieval or workflow result.
+
+### Oversized-Chunk Maintenance Step and Two-Document Gate
+
+The second real PDF's header-only Markdown parse produced pathological chunks
+(for example `Contents` at about 231,825 characters and `Bibliography` at about
+127,090). Individual oversized chunks reproduced Ollama embedding HTTP 400 EOF
+failures before Chroma upsert. This was not a stable-ID collision, active-source
+filter, BM25, Chroma collection, telemetry, or citation defect.
+
+`DocumentProcessor` now applies deterministic post-header subchunking with the
+provider-neutral `DOCUMENT_CHUNK_MAX_CHARACTERS` setting (default 4000; valid
+range 256–16000). Normal chunks are retained unchanged. Derived chunks retain
+header/source/page metadata, then receive deterministic C05 IDs when provenance
+is attached. On cached input, legacy oversized chunks are transformed and saved
+back to the same cache entry; no user cache or Chroma directory is deleted.
+
+Focused bounded-chunk/cache tests: PASS — 5/5. They prove normal-chunk
+preservation, deterministic bounded subchunks, metadata/provenance and unique
+stable IDs, non-destructive legacy-cache migration, and temporary two-source
+Chroma/BM25/citation construction with an embedding fake that rejects oversized
+input. Full deterministic suite: PASS — 115/115. C06 and C07 runners, `pip
+check`, compilation, and `git diff --check`: PASS.
+
+The exact real PDFs were then run through the local Gradio endpoint on temporary
+port 7861 because port 7860 was occupied. Both legacy caches migrated; the
+active set contained 2,095 unique bounded chunks (376 Agentic AI and 1,719
+Hitchhiker's Guide), maximum 3,995 characters, with zero chunks above the
+4,000-character cap. Nevertheless retriever initialization failed before
+Compare Sources. A safe temporary direct probe of that same bounded corpus
+reproduced `OllamaProviderError` caused by Ollama `ResponseError`: tokenizer
+HTTP 400 EOF. This proved the remaining defect was that the embedding adapter
+forwarded the entire 2,095-text corpus as one request; it was no longer an
+oversized individual-chunk failure.
+
+The approved follow-up kept batching entirely inside `OllamaEmbeddingProvider`.
+`OLLAMA_EMBEDDING_BATCH_SIZE` is a non-secret setting with default 32 and valid
+range 1–256. `embed_documents()` deterministically slices input in source order,
+calls Ollama once per batch, validates one embedding per input, and concatenates
+only after each successful batch. A failed or wrong-length batch raises the
+existing safe `OllamaProviderError`; partial embeddings are never returned.
+`EmbeddingProvider`, `RetrieverBuilder`, Chroma/BM25 semantics, and all agent
+contracts remain unchanged.
+
+Focused provider/config tests: PASS — 18/18, including empty/small input,
+exact batch boundaries, final partial batch, order/count preservation,
+middle-batch failure without partial return, response-count mismatch, unchanged
+query embedding, and configuration bounds. Bounded-chunk/cache tests: PASS —
+5/5. Full deterministic suite: PASS — 119/119. C06 and C07 runners, `pip
+check`, compilation, and `git diff --check`: PASS.
+
+Final real Gradio validation used the same two PDFs on temporary local port
+7861. Both documents processed as 2,095 unique bounded chunks; all 66 ordered
+embedding batches completed, Chroma and BM25 initialized, and the hybrid
+retriever was built. The real **Compare Sources** operation then produced an
+answer with citations to both uploaded PDFs, strict ResearchResult/citation
+handoff, and typed verification `Supported: YES`, `Relevant: YES`, with no
+unsupported claims, contradictions, or correction feedback. The deterministic
+C03 route therefore terminated `VERIFIED`.
+
+A direct persistent-collection filter/query check returned only the two active
+document IDs and no unrelated document ID. It found 2,463 stored records for
+those IDs versus the current 2,095 bounded active chunks: earlier pre-subchunk
+records remain under the same source identities. They did not leak another
+document and did not affect the successful comparison, but representation-aware
+cleanup/migration is a known deferred maintenance concern; this hotfix neither
+deletes user Chroma data nor changes Hotfix A source-level scoping.
+
+### HOTFIX_B_QUALITY_GATE
+
+**Status: BLOCKED — later repeated real Compare Sources validation found a
+separate grounding failure.**
+
+#### Verification Control-Consistency Maintenance (latest verified state)
+
+The provider-visible `VerificationResult` schema is now a strict discriminated
+union. `supported=true` selects `SupportedVerificationResult`, whose
+`unsupported_claims` and `contradictions` arrays have `maxItems: 0`; the
+alternative `supported=false` selects `UnsupportedVerificationResult` and may
+carry evidence failures. The Ollama structured provider receives this `oneOf`
+schema with its `supported` discriminator, rather than a permissive boolean
+schema followed only by a model-side invariant. The workflow still accepts the
+common `VerificationResult` interface, so an invalid contradictory JSON result
+raises the existing `StructuredOutputError` and follows the C09 safe `FAILURE`
+path; it cannot route to `VERIFIED`.
+
+The verifier prompt now states the same mutually exclusive control rules while
+preserving task-aware QUESTION, DOCUMENT_SYNTHESIS, and
+MULTI_DOCUMENT_COMPARISON evidence semantics. This is not a repair step: no
+prose, thinking channel, or partial JSON is parsed, and contradictory output is
+still rejected.
+
+- Focused control-consistency tests: PASS — 9/9. They cover both valid typed
+  variants, rejection of both contradictory positive states, the provider
+  `oneOf`/discriminator/max-items schema, and safe non-VERIFIED workflow
+  termination for contradictory JSON.
+- Task-aware verification: PASS — 6/6; structured-output: PASS — 5/5; C04
+  typed-contract routing: PASS — 6/6.
+- Full deterministic suite: PASS — 122/122. C06 retrieval and C07
+  answer/verification runners, `pip check`, compilation, and `git diff
+  --check`: PASS.
+
+The first required fresh local Gradio **Compare Sources** execution against the
+two uploaded PDFs completed with a typed verification result
+`Supported: NO`, `Relevant: YES` and terminal `RETRY_EXHAUSTED`. Research
+completed and an Agentic AI citation resolved, but a Hitchhiker citation did
+not resolve. Crucially, no contradictory `supported=true`/evidence-failure
+state occurred. Because the required three-run all-success real gate did not
+pass on run 1, the remaining temporary runs were stopped cleanly and this
+hotfix remains blocked. This is evidence of a separate multi-document
+grounding/citation or research-quality issue, not a reason to weaken the new
+verification contract.
+
+#### Current-Draft Comparison Grounding Maintenance (latest verified state)
+
+The subsequent diagnosis established that active comparison evidence was already
+balanced (six selected chunks from each active document) and that the citation
+resolver preserved every valid mapping. The missing contract was downstream:
+the model could return a structurally valid `ResearchResult` whose current draft
+mapped claims to only one active document, or referenced an unknown/unselected
+chunk ID. A later retry could therefore replace a better-grounded prior draft.
+
+`ComparisonGrounding` now records deterministic, content-free source coverage
+from the existing resolved citations: `active_source_ids`,
+`grounded_source_ids`, and `missing_source_ids`, with derived active/grounded
+counts. It gives coverage credit only to citations marked available after C05
+resolution against the **current selected evidence**. For
+`MULTI_DOCUMENT_COMPARISON`, every active document must have at least one valid
+mapped claim. Incomplete current drafts clear citations and any prior typed
+verification result, emit safe run-trace counts/IDs, and reuse the existing C03
+bounded re-research route; they cannot enter verification or become `VERIFIED`.
+QUESTION and DOCUMENT_SYNTHESIS do not use this rule.
+
+- Focused comparison-grounding tests: PASS — 7/7. They prove A+B and N-source
+  coverage, A-only/B-only rejection, no credit for unknown IDs, verification
+  after complete grounding, safe retry exhaustion before verification when
+  incomplete, and no reuse of prior citations or verification state by a later
+  one-source draft.
+- Full deterministic suite: PASS — 129/129. C06 retrieval evaluation and C07
+  answer/verification evaluation: PASS. `pip check`, Python compilation, and
+  `git diff --check`: PASS. Chroma telemetry messages remained non-blocking.
+- Fresh real local Gradio Compare Sources with the same two PDFs: active
+  collection/build succeeded; the final current draft had available citations
+  from both uploaded PDFs (plus one explicitly unavailable unknown mapping), so
+  comparison grounding passed. Verification then returned typed
+  `Supported: NO`, `Relevant: YES`, with an evidence-grounded unsupported claim
+  and terminal `RETRY_EXHAUSTED`. The UI does not surface per-attempt trace
+  metadata, so this run proves final-draft coverage but not a claim about every
+  intermediate retry. No raw documents, prompts, or model output were recorded.
+
+This is the next distinct boundary: comparison grounding now prevents
+one-source drafts from being treated as valid comparisons, but it does not make
+the model's comparative claims fully evidence-supported. Per the approved scope,
+correction-guided re-research was not implemented.
+
+#### Atomic Comparison-Claim Grounding Maintenance (latest verified state)
+
+The next diagnosis showed that valid source-balanced evidence, valid current
+draft coverage, and resolvable citations still do not prove that every factual
+clause in a comparison is supported. The Research Agent could bundle multiple
+independently verifiable facts into one comparison claim. In the fresh real
+run, both active PDFs had valid final-draft citations, but the verifier rejected
+one compound comparison claim because part of its wording (including a
+source-identity assertion) was not established by the selected cited evidence.
+That rejection was correct: semantic claim support is stricter than valid chunk
+IDs or one citation per source.
+
+For `MULTI_DOCUMENT_COMPARISON` only, `ResearchAgent` now adds an explicit
+task-scoped instruction to generate atomic factual/comparative claims, omit
+details with insufficient selected-evidence support, and map a two-source
+similarity or difference to supporting chunks from both asserted sides. The
+instruction does not alter QUESTION or DOCUMENT_SYNTHESIS behavior. It does not
+repair model output, relax C04/C09 validation, substitute document identity for
+evidence, alter the existing `ComparisonGrounding` rule, or bypass verification.
+
+- Focused atomic-comparison tests: PASS — 5/5. They prove the comparison-only
+  instruction is present; atomic A/B mappings resolve to their respective
+  sources; a two-sided comparative claim maps to both; a compound claim may
+  have two-source coverage yet still requires verification; and QUESTION and
+  DOCUMENT_SYNTHESIS prompts remain unchanged.
+- Comparison-grounding tests: PASS — 7/7. Product evidence semantics, research
+  output capacity, structured-output, verification semantics, task-aware
+  verification, and control-consistency focused suites: PASS.
+- Full deterministic suite: PASS — 134/134. C06 retrieval evaluation and C07
+  answer/verification evaluation: PASS. `pip check`, Python compilation, and
+  `git diff --check`: PASS.
+- Required fresh real local Gradio Compare Sources run: BLOCKED. The two active
+  PDFs built and retrieved successfully; selected evidence remained six chunks
+  per source; final current-draft citations resolved to both PDFs; verification
+  returned typed `Supported: NO`, `Relevant: YES`, with one unsupported compound
+  claim and no contradictions; the C03 bounded loop ended `RETRY_EXHAUSTED`.
+  No provider truncation or contradictory structured verification control state
+  occurred. Per approved scope, validation stopped after this first failed run;
+  the UI does not expose per-attempt trace metadata, so no unverified
+  intermediate-attempt claim is recorded.
+
+**Professional lesson:** provenance and source coverage are necessary but not
+sufficient for reliable multi-document answers. Each generated assertion must
+be narrow enough that a reviewer can match it to its evidence; otherwise a
+plausible sentence can conceal an unsupported subclaim.
+
+**Student takeaway:** a citation answers “where did this come from?” while an
+atomic claim answers “what exactly is being supported?” Good agentic systems
+need both, then still need independent verification.
+
+#### Correction-Guided Re-Research Maintenance (latest verified state)
+
+The C03 retry loop already had a bounded route after a typed unsupported or
+irrelevant verification result, but it discarded the result's typed
+`correction_feedback`. The next Research call therefore regenerated from the
+same question, selected evidence, and product intent without knowing what the
+previous verifier had rejected.
+
+`AgentState.correction_feedback` now holds only the immediately preceding
+typed verifier feedback in memory. `record_retry` replaces it for a
+verification-driven retry and explicitly clears it when comparison grounding,
+rather than verification, causes the route. `ResearchAgent` receives it only
+on that next retry and asks the model to correct/remove unsupported claims
+using the unchanged selected context and task intent. It cannot alter routing,
+retrieval, active documents, provider settings, grounding, or verification.
+The first Research attempt remains unchanged. C08 traces record only the retry
+attempt and a `correction_feedback_supplied` boolean; they never record the
+feedback text.
+
+- Focused correction-guided retry tests: PASS — 6/6. They prove no feedback on
+  the first Research call; latest-only feedback replacement; no further call
+  after verification success; bounded retry exhaustion; verification remains
+  authoritative; current-draft comparison grounding remains required; QUESTION
+  and DOCUMENT_SYNTHESIS compatibility; atomic comparison instructions survive
+  a retry; and trace content excludes the feedback text.
+- Atomic comparison, comparison-grounding, embedding-safe chunking, product
+  evidence/product-operation, research-output, verification-output/semantics,
+  task-aware verification, control-consistency, C03 bounded-loop, and C08 trace
+  suites: PASS. Full deterministic suite: PASS — 140/140. C06 retrieval and
+  C07 answer/verification evaluation: PASS. `pip check`, Python compilation,
+  and `git diff --check`: PASS.
+- Required fresh local Gradio Compare Sources run: BLOCKED. Both PDFs were
+  loaded into the local two-document workflow. A grounded comparison draft
+  produced available citations from both PDFs, then a later bounded Research
+  retry hit the existing safe provider-failure boundary and the UI returned
+  `The research provider was unavailable.` No final typed verification result
+  was produced for that failed retry. The Gradio UI intentionally does not
+  expose per-attempt trace events, so this run does not claim the feedback text
+  or exact intermediate decisions; deterministic tests prove the handoff
+  contract. The displayed earlier-draft citations are provenance from the last
+  successful Research result, not a claim that the final provider-failed retry
+  was verified.
+
+**Professional lesson:** corrective feedback is useful only when it is a
+bounded, typed handoff with a fresh independent verification afterward. It
+must not become a hidden success signal or an accumulating memory that changes
+future attempts unpredictably.
+
+**Student takeaway:** retries are not automatically learning. A retry becomes
+purposeful when it receives a specific, bounded correction, but it still needs
+the same evidence and another independent verification before the system can
+trust it.
+
+#### Targeted Draft-Revision Maintenance (latest verified state)
+
+The next bounded refinement avoids asking a retry to generate a whole answer
+from scratch. On a verification-driven C03 retry, `record_retry` snapshots the
+immediately preceding `draft_answer` in `draft_for_revision` alongside the
+latest typed correction feedback. The next `ResearchAgent` call receives that
+snapshot, the same selected context, and the same typed `EvidenceIntent`.
+Its retry-only instruction preserves supported content, removes or corrects
+only feedback-implicated claims, forbids new factual details, keeps atomic
+comparison rules, and requires a complete strict `ResearchResult`. The first
+Research attempt is unchanged. After the next Research call, the snapshot is
+cleared; a later retry replaces it with the newer draft, while a
+comparison-grounding retry clears it so stale material cannot cross drafts.
+
+The model still performs the revision. C05 citation resolution, current-draft
+comparison grounding, C04 strict contracts, C03 retry bounds, C08 safe traces,
+and VerificationAgent remain independent controls. Run traces add the
+content-free `draft_revision_supplied` boolean; neither the prior draft nor
+feedback text is traced.
+
+- Focused targeted-revision tests: PASS — 5/5. They prove no prior draft on the
+  initial attempt; newest-draft/newest-feedback replacement; a targeted
+  supported-content-preserving revision; comparison grounding and verification
+  after revision; safe bounded failure; and QUESTION/DOCUMENT_SYNTHESIS
+  compatibility.
+- Full deterministic suite: PASS — 145/145. C06 retrieval and C07
+  answer/verification evaluation: PASS. `pip check`, Python compilation, and
+  `git diff --check`: PASS.
+- Required fresh local Gradio Compare Sources run: BLOCKED. The two-PDF build
+  and grounded citation path completed with citations from both active PDFs,
+  but the workflow then returned the existing safe terminal message
+  `The verification provider was unavailable.` No final typed
+  `VerificationResult` was available for that provider-failed step. The UI does
+  not expose attempt-level trace booleans, so it cannot prove from this run
+  whether a targeted revision was used; focused tests prove that contract. No
+  additional execution was attempted after this first failed run.
+
+#### Verification Output-Budget Calibration (current `qwen3.5:9b` runtime)
+
+Safe diagnosis of the current two-document comparison failure established that
+the configured `qwen3.5:9b` verifier, with `num_ctx=8192`, native JSON Schema,
+`think=False`, and temperature `0.0`, terminated at its 300-token generation
+cap. The response contained text but ended with `done_reason=length` and was
+not complete JSON; the Ollama adapter correctly raised `OllamaProviderError`
+before strict parsing could accept a partial result. This was output-token
+truncation, not context exhaustion: the probe recorded `prompt_eval_count=2981`
+and `eval_count=300`.
+
+A non-persistent calibration held one real two-document comparison draft only
+in process memory and verified it three times at each candidate limit. With the
+same `MULTI_DOCUMENT_COMPARISON` prompt/schema/evidence shape, all runs at 400,
+450, 500, and 600 stopped normally, produced complete JSON, and passed strict
+`VerificationResult` validation. The smallest passing bound was 400; its three
+results used 24 generated tokens each, leaving 376 tokens of measured headroom.
+The bounded setting is therefore updated from 300 to 400. This is calibration
+evidence, not a claim that every possible future verbose verification output
+will fit; the required real Compare Sources gate remains authoritative.
+
+#### Final Repeated Real Compare Sources Gate (400-token verifier)
+
+The isolated local Gradio application was started on temporary port 7861 with
+the current `qwen3.5:9b` / `qwen3-embedding:0.6b` local configuration, 8192
+context window, 1500-token Research budget, and calibrated 400-token
+Verification budget. The same two uploaded PDFs were used for three complete
+`Compare Sources` executions. Every run produced an answer, valid citations
+from both active PDFs, `Supported: YES`, `Relevant: YES`, and no provider or
+structured-output truncation failure. The Gradio adapter displays the typed
+verification report but does not expose `terminal_outcome`; under the preserved
+C04/C03 routing contract, the observed `supported=true` and `relevant=true`
+combination routes only to `VERIFIED`.
+
+- Real Compare Sources run 1: PASS — two-source citations, Supported YES,
+  Relevant YES, no provider failure/truncation, deterministic VERIFIED route.
+- Real Compare Sources run 2: PASS — same conditions.
+- Real Compare Sources run 3: PASS — same conditions.
+- Full deterministic suite: PASS — 145/145. Focused verification plus all
+  Hotfix A/B suites: PASS. C06 retrieval and C07 answer/verification runners:
+  PASS. `pip check`, Python compilation, and `git diff --check`: PASS.
+
+#### Final Owner Manual Product Validation
+
+The project owner manually validated five V1-C10 product operations against
+the current local runtime: **Ask**, **Summarize**, **Key Points**, **Generate
+Study Questions**, and **Compare Sources**. The final
+manual Compare Sources validation used `qwen3.5:9b` and produced Supported YES,
+Relevant YES, citations from both active documents, no unsupported claims, and
+no contradictions. This owner-observed evidence supplements—not replaces—the
+deterministic and repeatable local Gradio validations above.
+
+**Professional lesson:** targeted revision reduces unnecessary regeneration,
+but it does not weaken independent failure boundaries. A provider failure after
+a grounded draft remains a failure, not evidence that the previous draft passed
+verification.
+
+**Student takeaway:** retry inputs should be explicit snapshots, not vague
+memory. That makes revision behavior testable and prevents an older answer or
+feedback item from quietly affecting a later attempt.
+
+**Professional lesson:** make an LLM's mutually exclusive routing states
+structural at the provider boundary, then treat a failed real quality gate as
+evidence of the next independent boundary rather than relabeling it as a
+schema success.
+
+**Student takeaway:** a JSON-shaped response is not enough. A discriminated
+schema makes impossible states unrepresentable to the workflow, but it cannot
+make a model cite or compare two sources correctly. Control reliability and
+grounding quality must be measured separately.
+
+- QUESTION preservation and deterministic typed-synthesis/comparison behavior:
+  PASS in tests.
+- Bounded active-document selection, comparison precondition, attributable
+  citations, and existing provider/workflow boundaries: PASS in tests.
+- Required real Gradio Summarize: PASS — grounded answer, active-PDF citation,
+  and `Supported: YES` / `Relevant: YES` were obtained with bounded context and
+  output settings.
+- Required real two-document retriever initialization: PASS — 2,095 bounded
+  chunks embedded through 66 ordered local batches; Chroma, BM25, and hybrid
+  construction completed.
+- Required real Compare Sources: PASS — earlier failed bounded runs remain
+  recorded above as diagnostic evidence. After the 400-token calibrated verifier
+  setting, all three required complete real runs produced grounded citations
+  from both active PDFs, Supported YES, Relevant YES, no provider/truncation
+  failure, and the deterministic VERIFIED route.
+- Hotfix B delivery, commit, push, PR, merge, V2-C01, and later V2 work: NOT
+  STARTED.
+
+---
+
 # V2 Evidence
 
 All V2 Cards are **BLOCKED / NOT STARTED** until V1 foundations and their required dependencies are closed with verified evidence.

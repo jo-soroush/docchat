@@ -4,8 +4,10 @@ from unittest import TestCase
 
 from product.operations import (
     OPERATION_LABELS,
+    OPERATION_INTENTS,
     OperationInputError,
     ResearchOperation,
+    build_operation_request,
     build_operation_question,
     gradio_operation_choices,
     run_operation,
@@ -22,8 +24,8 @@ class RecordingWorkflow:
             "run_trace": {"run_id": "safe-run"},
         }
 
-    def full_pipeline(self, question: str, retriever: object) -> dict:
-        self.calls.append((question, retriever))
+    def full_pipeline(self, question: str, retriever: object, **kwargs) -> dict:
+        self.calls.append((question, retriever, kwargs))
         return self.result
 
 
@@ -59,6 +61,23 @@ class ProductOperationTests(TestCase):
             with self.subTest(operation=operation):
                 self.assertEqual(build_operation_question(operation.value, inputs[operation]), expected_question)
 
+    def test_all_operations_preserve_typed_evidence_intent(self) -> None:
+        expected = {
+            ResearchOperation.ASK: "QUESTION",
+            ResearchOperation.EXPLAIN_CONCEPT: "QUESTION",
+            ResearchOperation.SUMMARIZE: "DOCUMENT_SYNTHESIS",
+            ResearchOperation.KEY_POINTS: "DOCUMENT_SYNTHESIS",
+            ResearchOperation.STUDY_QUESTIONS: "DOCUMENT_SYNTHESIS",
+            ResearchOperation.COMPARE_SOURCES: "MULTI_DOCUMENT_COMPARISON",
+        }
+        for operation, intent in expected.items():
+            focus = "topic" if operation in {ResearchOperation.ASK, ResearchOperation.EXPLAIN_CONCEPT} else ""
+            with self.subTest(operation=operation):
+                request = build_operation_request(operation.value, focus)
+                self.assertEqual(request.operation, operation)
+                self.assertEqual(request.evidence_intent, OPERATION_INTENTS[operation])
+                self.assertEqual(request.evidence_intent.value, intent)
+
     def test_required_operation_input_and_unknown_operation_fail_safely(self) -> None:
         with self.assertRaisesRegex(OperationInputError, "Enter a question"):
             build_operation_question(ResearchOperation.ASK.value, "")
@@ -76,7 +95,16 @@ class ProductOperationTests(TestCase):
         self.assertIs(result, workflow.result)
         self.assertEqual(
             workflow.calls,
-            [("Generate study questions from the uploaded document(s). Focus on: retrieval concepts", retriever)],
+            [
+                (
+                    "Generate study questions from the uploaded document(s). Focus on: retrieval concepts",
+                    retriever,
+                    {
+                        "evidence_intent": OPERATION_INTENTS[ResearchOperation.STUDY_QUESTIONS],
+                        "operation": ResearchOperation.STUDY_QUESTIONS.value,
+                    },
+                )
+            ],
         )
         self.assertEqual(result["terminal_outcome"], "VERIFIED")
         self.assertEqual(result["citations"][0]["chunk_id"], "evidence-1")

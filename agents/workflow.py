@@ -13,8 +13,10 @@ from config.settings import Settings, settings
 from providers.contracts import ChatProvider
 from providers.contracts import ProviderError
 from retriever.builder import RetrievalError
+from retriever.evidence import EvidenceCollectionError, EvidenceIntent
 
 from .contracts import (
+    ComparisonGrounding,
     RelevanceResult,
     ResearchResult,
     StructuredOutputError,
@@ -22,7 +24,7 @@ from .contracts import (
     TerminalOutcome,
     VerificationResult,
 )
-from .citations import format_citation_report
+from .citations import evaluate_comparison_grounding, format_citation_report
 from .relevance_checker import RelevanceChecker
 from .research_agent import ResearchAgent
 from .run_trace import RunTrace, RunTraceEvent, TraceStage
@@ -33,15 +35,20 @@ logger = logging.getLogger(__name__)
 
 class AgentState(TypedDict):
     question: str
+    operation: str | None
+    evidence_intent: EvidenceIntent
     documents: list[Document]
     draft_answer: str
     verification_report: str
     retriever: EnsembleRetriever
     verification_retries: int
+    correction_feedback: str | None
+    draft_for_revision: str | None
     terminal_outcome: TerminalOutcome | None
     relevance_result: RelevanceResult | None
     research_result: ResearchResult | None
     citations: list[SourceCitation]
+    comparison_grounding: ComparisonGrounding | None
     verification_result: VerificationResult | None
     structured_error: str
     run_id: str
@@ -83,7 +90,12 @@ class AgentWorkflow:
         workflow.add_conditional_edges(
             "research",
             self._decide_after_research,
-            {"verify": "verify", "failure": "mark_failure"},
+            {
+                "verify": "verify",
+                "re_research": "record_retry",
+                "retry_exhausted": "mark_retry_exhausted",
+                "failure": "mark_failure",
+            },
         )
         workflow.add_conditional_edges(
             "verify",
@@ -101,11 +113,20 @@ class AgentWorkflow:
         workflow.add_edge("mark_failure", END)
         return workflow.compile()
 
-    def full_pipeline(self, question: str, retriever: EnsembleRetriever):
+    def full_pipeline(
+        self,
+        question: str,
+        retriever: EnsembleRetriever,
+        *,
+        evidence_intent: EvidenceIntent = EvidenceIntent.QUESTION,
+        operation: str | None = None,
+    ):
         trace_started_at = perf_counter()
         run_id = uuid4().hex
         try:
-            documents = retriever.invoke(question)
+            documents = self._collect_evidence(retriever, evidence_intent, question)
+        except EvidenceCollectionError as exc:
+            return self._initial_failure_result(run_id, trace_started_at, str(exc))
         except (ProviderError, RetrievalError):
             return self._initial_failure_result(
                 run_id, trace_started_at, "Document retrieval was unavailable."
@@ -122,15 +143,20 @@ class AgentWorkflow:
         retrieved_chunk_ids = self._retrieved_chunk_ids(documents)
         initial_state = AgentState(
             question=question,
+            operation=operation,
+            evidence_intent=evidence_intent,
             documents=documents,
             draft_answer="",
             verification_report="",
             retriever=retriever,
             verification_retries=0,
+            correction_feedback=None,
+            draft_for_revision=None,
             terminal_outcome=None,
             relevance_result=None,
             research_result=None,
             citations=[],
+            comparison_grounding=None,
             verification_result=None,
             structured_error="",
             run_id=run_id,
@@ -149,6 +175,7 @@ class AgentWorkflow:
         final_state = self.compiled_workflow.invoke(initial_state)
         relevance_result = final_state["relevance_result"]
         verification_result = final_state["verification_result"]
+        comparison_grounding = final_state["comparison_grounding"]
         return {
             "draft_answer": final_state["draft_answer"],
             "verification_report": final_state["verification_report"],
@@ -162,6 +189,9 @@ class AgentWorkflow:
             "verification_result": (
                 verification_result.model_dump() if verification_result is not None else None
             ),
+            "comparison_grounding": (
+                comparison_grounding.model_dump() if comparison_grounding is not None else None
+            ),
             "run_trace": RunTrace(
                 run_id=final_state["run_id"],
                 duration_ms=self._elapsed_ms(final_state["trace_started_at"]),
@@ -174,11 +204,16 @@ class AgentWorkflow:
     def _check_relevance_step(self, state: AgentState) -> dict:
         stage_started_at = perf_counter()
         try:
-            result = self.relevance_checker.check(
-                question=state["question"],
-                retriever=state["retriever"],
-                k=20,
-            )
+            if state["evidence_intent"] is EvidenceIntent.QUESTION:
+                result = self.relevance_checker.check(
+                    question=state["question"],
+                    retriever=state["retriever"],
+                    k=20,
+                )
+            else:
+                result = self.relevance_checker.check_active_document_evidence(
+                    state["documents"], state["evidence_intent"]
+                )
         except StructuredOutputError as exc:
             return self._structured_failure(
                 state,
@@ -226,10 +261,29 @@ class AgentWorkflow:
             ),
         }
 
+    @staticmethod
+    def _collect_evidence(retriever, intent: EvidenceIntent, question: str) -> list[Document]:
+        collector = getattr(retriever, "collect_evidence", None)
+        if callable(collector):
+            return list(collector(intent, question).documents)
+        if intent is not EvidenceIntent.QUESTION:
+            raise EvidenceCollectionError(
+                "The active retriever does not support the requested study operation."
+            )
+        return retriever.invoke(question)
+
     def _research_step(self, state: AgentState) -> dict:
         stage_started_at = perf_counter()
+        correction_feedback = state["correction_feedback"]
+        draft_for_revision = state["draft_for_revision"]
         try:
-            result = self.researcher.generate(state["question"], state["documents"])
+            result = self.researcher.generate(
+                state["question"],
+                state["documents"],
+                intent=state["evidence_intent"],
+                correction_feedback=correction_feedback,
+                previous_draft=draft_for_revision,
+            )
         except StructuredOutputError as exc:
             return self._structured_failure(
                 state,
@@ -243,15 +297,53 @@ class AgentWorkflow:
                 state, "The research provider was unavailable.", exc, TraceStage.RESEARCH,
                 self._elapsed_ms(stage_started_at),
             )
+        comparison_grounding = None
+        if state["evidence_intent"] is EvidenceIntent.MULTI_DOCUMENT_COMPARISON:
+            comparison_grounding = evaluate_comparison_grounding(result.citations, state["documents"])
+            if not comparison_grounding.is_complete:
+                return {
+                    "research_result": result,
+                    "draft_answer": result.draft_answer,
+                    "draft_for_revision": None,
+                    # This draft is not comparison-grounded, so it must not
+                    # present a partial source set as a successful comparison.
+                    "citations": [],
+                    "comparison_grounding": comparison_grounding,
+                    # A previous retry may have produced a verification result.
+                    # It describes a different draft and must not survive as if it
+                    # applied to this incomplete current comparison draft.
+                    "verification_result": None,
+                    "verification_report": (
+                        "**Comparison Grounding:** INCOMPLETE\n"
+                        "The current comparison draft did not map evidence from every active source."
+                    ),
+                    "trace_events": self._append_trace(
+                        state,
+                        self._trace_event(
+                            state,
+                            TraceStage.RESEARCH,
+                            route="comparison_grounding_incomplete",
+                            comparison_grounding=comparison_grounding,
+                            correction_feedback_supplied=bool(correction_feedback),
+                            draft_revision_supplied=draft_for_revision is not None,
+                            stage_latency_ms=self._elapsed_ms(stage_started_at),
+                        ),
+                    ),
+                }
         return {
             "research_result": result,
             "draft_answer": result.draft_answer,
+            "draft_for_revision": None,
             "citations": result.citations,
+            "comparison_grounding": comparison_grounding,
             "trace_events": self._append_trace(
                 state,
                 self._trace_event(
                     state,
                     TraceStage.RESEARCH,
+                    comparison_grounding=comparison_grounding,
+                    correction_feedback_supplied=bool(correction_feedback),
+                    draft_revision_supplied=draft_for_revision is not None,
                     stage_latency_ms=self._elapsed_ms(stage_started_at),
                 ),
             ),
@@ -261,7 +353,10 @@ class AgentWorkflow:
         stage_started_at = perf_counter()
         try:
             result = self.verifier.check(
-                state["question"], state["draft_answer"], state["documents"]
+                state["question"],
+                state["draft_answer"],
+                state["documents"],
+                intent=state["evidence_intent"],
             )
         except StructuredOutputError as exc:
             return self._structured_failure(
@@ -302,7 +397,12 @@ class AgentWorkflow:
         return "relevant" if result.is_relevant else "irrelevant"
 
     def _decide_after_research(self, state: AgentState) -> str:
-        return "failure" if state["terminal_outcome"] == TerminalOutcome.FAILURE else "verify"
+        if state["terminal_outcome"] == TerminalOutcome.FAILURE:
+            return "failure"
+        grounding = state["comparison_grounding"]
+        if grounding is not None and not grounding.is_complete:
+            return self._comparison_grounding_route(state)
+        return "verify"
 
     def _decide_next_step(self, state: AgentState) -> str:
         if state["terminal_outcome"] == TerminalOutcome.FAILURE:
@@ -315,6 +415,12 @@ class AgentWorkflow:
     def _verification_route(self, state: AgentState, result: VerificationResult) -> str:
         if not result.requires_research:
             return "verified"
+        if state["verification_retries"] < self.config.MAX_VERIFICATION_RETRIES:
+            return "re_research"
+        return "retry_exhausted"
+
+    def _comparison_grounding_route(self, state: AgentState) -> str:
+        """Reuse the existing bounded C03 research budget for an invalid draft."""
         if state["verification_retries"] < self.config.MAX_VERIFICATION_RETRIES:
             return "re_research"
         return "retry_exhausted"
@@ -367,6 +473,7 @@ class AgentWorkflow:
             "verification_retries": 0,
             "terminal_outcome": TerminalOutcome.FAILURE.value,
             "relevance_decision": None,
+            "comparison_grounding": None,
             "verification_result": None,
             "run_trace": RunTrace(
                 run_id=run_id, duration_ms=self._elapsed_ms(started_at), events=[event, terminal]
@@ -390,8 +497,25 @@ class AgentWorkflow:
 
     def _record_retry_step(self, state: AgentState) -> dict:
         next_attempt = state["verification_retries"] + 1
+        verification_result = state["verification_result"]
+        # A retry caused by incomplete comparison grounding has no new
+        # verification result. Clear any prior feedback so it cannot leak into
+        # a different current draft. Otherwise replace it with only the most
+        # recent typed verifier feedback.
+        correction_feedback = (
+            verification_result.correction_feedback
+            if verification_result is not None and verification_result.requires_research
+            else None
+        )
+        draft_for_revision = (
+            state["draft_answer"]
+            if verification_result is not None and verification_result.requires_research
+            else None
+        )
         return {
             "verification_retries": next_attempt,
+            "correction_feedback": correction_feedback,
+            "draft_for_revision": draft_for_revision,
             "trace_events": self._append_trace(
                 state,
                 self._trace_event(
@@ -399,6 +523,8 @@ class AgentWorkflow:
                     TraceStage.ROUTING,
                     attempt=next_attempt,
                     route="re_research",
+                    correction_feedback_supplied=bool(correction_feedback),
+                    draft_revision_supplied=draft_for_revision is not None,
                 ),
             ),
         }
@@ -418,8 +544,12 @@ class AgentWorkflow:
 
     def _mark_retry_exhausted_step(self, state: AgentState) -> dict:
         retries = state["verification_retries"]
+        grounding = state["comparison_grounding"]
         message = (
-            "Verification was not achieved after "
+            "Comparison grounding was not achieved after "
+            f"{retries} allowed re-research attempt(s)."
+            if grounding is not None and not grounding.is_complete
+            else "Verification was not achieved after "
             f"{retries} allowed re-research attempt(s)."
         )
         return {
@@ -434,6 +564,7 @@ class AgentWorkflow:
                     state,
                     TraceStage.TERMINAL,
                     terminal_outcome=TerminalOutcome.RETRY_EXHAUSTED,
+                    comparison_grounding=grounding,
                 ),
             ),
         }
@@ -476,6 +607,9 @@ class AgentWorkflow:
         attempt: int | None = None,
         verification_supported: bool | None = None,
         verification_relevant: bool | None = None,
+        correction_feedback_supplied: bool = False,
+        draft_revision_supplied: bool = False,
+        comparison_grounding: ComparisonGrounding | None = None,
         route: str | None = None,
         terminal_outcome: TerminalOutcome | None = None,
         safe_error: str | None = None,
@@ -490,6 +624,19 @@ class AgentWorkflow:
             attempt=state["verification_retries"] if attempt is None else attempt,
             verification_supported=verification_supported,
             verification_relevant=verification_relevant,
+            correction_feedback_supplied=correction_feedback_supplied,
+            draft_revision_supplied=draft_revision_supplied,
+            active_source_count=(
+                comparison_grounding.active_source_count if comparison_grounding is not None else None
+            ),
+            grounded_source_count=(
+                comparison_grounding.grounded_source_count
+                if comparison_grounding is not None
+                else None
+            ),
+            missing_source_ids=(
+                comparison_grounding.missing_source_ids if comparison_grounding is not None else []
+            ),
             route=route,
             terminal_outcome=terminal_outcome,
             safe_error=safe_error,

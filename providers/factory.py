@@ -22,9 +22,11 @@ def build_runtime_providers(config: Settings = settings) -> ProviderBundle:
         chat=OllamaChatProvider(
             model=config.OLLAMA_CHAT_MODEL,
             base_url=config.OLLAMA_BASE_URL,
+            context_window=config.OLLAMA_CONTEXT_WINDOW,
         ),
         embeddings=OllamaEmbeddingProvider(
             model=config.OLLAMA_EMBEDDING_MODEL,
             base_url=config.OLLAMA_BASE_URL,
+            batch_size=config.OLLAMA_EMBEDDING_BATCH_SIZE,
         ),
     )

@@ -1,8 +1,9 @@
 """Typed contracts between DocChat reasoning agents and workflow routing."""
 
 from enum import Enum
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 
 class StructuredOutputError(ValueError):
@@ -72,13 +73,28 @@ class SourceCitation(StrictAgentResult):
     message: str | None = None
 
 
-class VerificationResult(StrictAgentResult):
-    """Verification control state for the supplied question, answer, and evidence.
+class ComparisonGrounding(StrictAgentResult):
+    """Deterministic current-draft source coverage for a comparison operation."""
 
-    ``supported`` means every factual claim in the answer is supported by the
-    supplied evidence.  A report cannot claim that while also listing an
-    unsupported claim or an evidence contradiction.
-    """
+    active_source_ids: list[str]
+    grounded_source_ids: list[str]
+    missing_source_ids: list[str]
+
+    @property
+    def active_source_count(self) -> int:
+        return len(self.active_source_ids)
+
+    @property
+    def grounded_source_count(self) -> int:
+        return len(self.grounded_source_ids)
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.missing_source_ids
+
+
+class VerificationResult(StrictAgentResult):
+    """Common workflow-facing fields for one discriminated verification outcome."""
 
     supported: bool
     relevant: bool
@@ -86,14 +102,19 @@ class VerificationResult(StrictAgentResult):
     contradictions: list[str]
     correction_feedback: str
 
-    @model_validator(mode="after")
-    def supported_reports_cannot_list_evidence_failures(self):
-        """Reject a deterministic contradiction in model control state."""
-        if self.supported and (self.unsupported_claims or self.contradictions):
-            raise ValueError(
-                "A supported verification result cannot list unsupported claims or contradictions."
-            )
-        return self
+    @classmethod
+    def from_model_json(cls, response_text: str):
+        try:
+            return _VERIFICATION_RESULT_ADAPTER.validate_json(response_text)
+        except ValidationError as exc:
+            raise StructuredOutputError(
+                "Model response did not match the required VerificationResult JSON contract."
+            ) from exc
+
+    @classmethod
+    def model_json_schema(cls) -> dict[str, Any]:
+        """Expose mutually exclusive supported/unsupported states to providers."""
+        return _VERIFICATION_RESULT_ADAPTER.json_schema()
 
     @property
     def requires_research(self) -> bool:
@@ -113,3 +134,24 @@ class VerificationResult(StrictAgentResult):
             f"**Relevant:** {relevant}\n"
             f"**Additional Details:** {feedback}\n"
         )
+
+
+class SupportedVerificationResult(VerificationResult):
+    """A support-confirming result that cannot carry evidence-failure lists."""
+
+    supported: Literal[True]
+    unsupported_claims: list[str] = Field(default_factory=list, max_length=0)
+    contradictions: list[str] = Field(default_factory=list, max_length=0)
+
+
+class UnsupportedVerificationResult(VerificationResult):
+    """An evidence-failure result that cannot claim support simultaneously."""
+
+    supported: Literal[False]
+
+
+VerificationOutcome = Annotated[
+    Union[SupportedVerificationResult, UnsupportedVerificationResult],
+    Field(discriminator="supported"),
+]
+_VERIFICATION_RESULT_ADAPTER = TypeAdapter(VerificationOutcome)

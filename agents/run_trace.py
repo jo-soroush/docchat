@@ -27,6 +27,11 @@ class RunTraceEvent(StrictAgentResult):
     attempt: int = Field(ge=0)
     verification_supported: bool | None = None
     verification_relevant: bool | None = None
+    correction_feedback_supplied: bool = False
+    draft_revision_supplied: bool = False
+    active_source_count: int | None = Field(default=None, ge=0)
+    grounded_source_count: int | None = Field(default=None, ge=0)
+    missing_source_ids: list[str] = Field(default_factory=list)
     route: str | None = None
     terminal_outcome: TerminalOutcome | None = None
     safe_error: str | None = None

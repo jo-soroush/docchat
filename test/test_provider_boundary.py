@@ -82,30 +82,59 @@ class ProviderBoundaryTests(TestCase):
         with self.assertRaises(ValueError):
             Settings(_env_file=None, GRADIO_SERVER_PORT=70000)
 
+    def test_ollama_context_window_defaults_to_8192_and_accepts_environment_override(self) -> None:
+        self.assertEqual(Settings(_env_file=None).OLLAMA_CONTEXT_WINDOW, 8192)
+        previous_value = os.environ.get("OLLAMA_CONTEXT_WINDOW")
+        try:
+            os.environ["OLLAMA_CONTEXT_WINDOW"] = "16384"
+            self.assertEqual(Settings(_env_file=None).OLLAMA_CONTEXT_WINDOW, 16384)
+        finally:
+            if previous_value is None:
+                os.environ.pop("OLLAMA_CONTEXT_WINDOW", None)
+            else:
+                os.environ["OLLAMA_CONTEXT_WINDOW"] = previous_value
+
+    def test_ollama_context_window_rejects_invalid_values(self) -> None:
+        for value in (1023, 65537):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                Settings(_env_file=None, OLLAMA_CONTEXT_WINDOW=value)
+
+    def test_ollama_embedding_batch_size_defaults_and_rejects_invalid_values(self) -> None:
+        self.assertEqual(Settings(_env_file=None).OLLAMA_EMBEDDING_BATCH_SIZE, 32)
+        for value in (0, 257):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                Settings(_env_file=None, OLLAMA_EMBEDDING_BATCH_SIZE=value)
+
     def test_configuration_builds_local_provider_bundle_without_credentials(self) -> None:
         config = Settings(
             _env_file=None,
             OLLAMA_BASE_URL="http://ollama.test:11434",
             OLLAMA_CHAT_MODEL="chat-test",
             OLLAMA_EMBEDDING_MODEL="embed-test",
+            OLLAMA_EMBEDDING_BATCH_SIZE=16,
+            OLLAMA_CONTEXT_WINDOW=16384,
         )
 
         bundle = build_runtime_providers(config)
 
         self.assertEqual(bundle.chat._model.model, "chat-test")
         self.assertEqual(bundle.chat._model.base_url, "http://ollama.test:11434")
+        self.assertEqual(bundle.chat._context_window, 16384)
         self.assertEqual(bundle.embeddings._embeddings.model, "embed-test")
+        self.assertEqual(bundle.embeddings._batch_size, 16)
 
     @patch("providers.ollama.ChatOllama")
     def test_ollama_chat_adapter_returns_text_and_passes_generation_options(self, chat_class: Mock) -> None:
         model = chat_class.return_value
         model.bind.return_value.invoke.return_value = SimpleNamespace(content=" local answer ")
 
-        provider = OllamaChatProvider(model="chat-test", base_url="http://ollama.test:11434")
+        provider = OllamaChatProvider(
+            model="chat-test", base_url="http://ollama.test:11434", context_window=8192
+        )
 
         self.assertEqual(provider.generate("prompt", temperature=0.2, max_tokens=25), "local answer")
         model.bind.assert_called_once_with(
-            options={"temperature": 0.2, "num_predict": 25}
+            options={"temperature": 0.2, "num_predict": 25, "num_ctx": 8192}
         )
         model.bind.return_value.invoke.assert_called_once_with("prompt")
 
@@ -118,7 +147,9 @@ class ProviderBoundaryTests(TestCase):
             content='{"decision":"CAN_ANSWER","explanation":"grounded"}'
         )
         schema = RelevanceResult.model_json_schema()
-        provider = OllamaChatProvider(model="chat-test", base_url="http://ollama.test:11434")
+        provider = OllamaChatProvider(
+            model="chat-test", base_url="http://ollama.test:11434", context_window=8192
+        )
 
         self.assertEqual(
             provider.generate_structured(
@@ -129,7 +160,7 @@ class ProviderBoundaryTests(TestCase):
         model.bind.assert_called_once_with(
             format=schema,
             think=False,
-            options={"temperature": 0.2, "num_predict": 25},
+            options={"temperature": 0.2, "num_predict": 25, "num_ctx": 8192},
         )
 
     @patch("providers.ollama.ChatOllama")
@@ -137,7 +168,9 @@ class ProviderBoundaryTests(TestCase):
         chat_class.return_value.bind.return_value.invoke.return_value = SimpleNamespace(
             content="", thinking="untrusted reasoning"
         )
-        provider = OllamaChatProvider(model="chat-test", base_url="http://ollama.test:11434")
+        provider = OllamaChatProvider(
+            model="chat-test", base_url="http://ollama.test:11434", context_window=8192
+        )
 
         with self.assertRaises(OllamaProviderError):
             provider.generate_structured(
@@ -147,7 +180,9 @@ class ProviderBoundaryTests(TestCase):
     @patch("providers.ollama.ChatOllama")
     def test_ollama_chat_adapter_wraps_unavailable_service(self, chat_class: Mock) -> None:
         chat_class.return_value.bind.side_effect = OSError("connection refused")
-        provider = OllamaChatProvider(model="chat-test", base_url="http://ollama.test:11434")
+        provider = OllamaChatProvider(
+            model="chat-test", base_url="http://ollama.test:11434", context_window=8192
+        )
 
         with self.assertRaises(OllamaProviderError):
             provider.generate("prompt", temperature=0, max_tokens=1)
@@ -155,10 +190,64 @@ class ProviderBoundaryTests(TestCase):
     @patch("providers.ollama.OllamaEmbeddings")
     def test_ollama_embedding_adapter_wraps_unavailable_service(self, embeddings_class: Mock) -> None:
         embeddings_class.return_value.embed_query.side_effect = OSError("connection refused")
-        provider = OllamaEmbeddingProvider(model="embed-test", base_url="http://ollama.test:11434")
+        provider = OllamaEmbeddingProvider(
+            model="embed-test", base_url="http://ollama.test:11434", batch_size=2
+        )
 
         with self.assertRaises(OllamaProviderError):
             provider.embed_query("question")
+
+    @patch("providers.ollama.OllamaEmbeddings")
+    def test_embedding_batches_are_ordered_and_include_final_partial_batch(
+        self, embeddings_class: Mock
+    ) -> None:
+        model = embeddings_class.return_value
+        model.embed_documents.side_effect = lambda batch: [[float(ord(text))] for text in batch]
+        provider = OllamaEmbeddingProvider(
+            model="embed-test", base_url="http://ollama.test:11434", batch_size=2
+        )
+
+        result = provider.embed_documents(["a", "b", "c", "d", "e"])
+
+        self.assertEqual(result, [[97.0], [98.0], [99.0], [100.0], [101.0]])
+        self.assertEqual(
+            [call.args[0] for call in model.embed_documents.call_args_list],
+            [["a", "b"], ["c", "d"], ["e"]],
+        )
+        self.assertEqual(provider.embed_documents([]), [])
+        self.assertEqual(model.embed_documents.call_count, 3)
+
+    @patch("providers.ollama.OllamaEmbeddings")
+    def test_embedding_middle_batch_failure_returns_no_partial_embeddings(self, embeddings_class: Mock) -> None:
+        model = embeddings_class.return_value
+        model.embed_documents.side_effect = [[[1.0], [2.0]], OSError("provider unavailable")]
+        provider = OllamaEmbeddingProvider(
+            model="embed-test", base_url="http://ollama.test:11434", batch_size=2
+        )
+
+        with self.assertRaisesRegex(OllamaProviderError, "embedding request failed"):
+            provider.embed_documents(["a", "b", "c"])
+
+        self.assertEqual(
+            [call.args[0] for call in model.embed_documents.call_args_list],
+            [["a", "b"], ["c"]],
+        )
+
+    @patch("providers.ollama.OllamaEmbeddings")
+    def test_embedding_response_count_mismatch_is_safe_and_query_behavior_is_unchanged(
+        self, embeddings_class: Mock
+    ) -> None:
+        model = embeddings_class.return_value
+        model.embed_documents.return_value = [[1.0]]
+        model.embed_query.return_value = [3.0, 4.0]
+        provider = OllamaEmbeddingProvider(
+            model="embed-test", base_url="http://ollama.test:11434", batch_size=2
+        )
+
+        with self.assertRaisesRegex(OllamaProviderError, "did not match"):
+            provider.embed_documents(["a", "b"])
+        self.assertEqual(provider.embed_query("question"), [3.0, 4.0])
+        model.embed_query.assert_called_once_with("question")
 
     def test_hybrid_retriever_keeps_bm25_and_vector_retrieval(self) -> None:
         documents = [

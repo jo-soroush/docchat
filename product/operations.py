@@ -1,7 +1,10 @@
 """Deterministic study-operation requests routed through the existing workflow."""
 
 from enum import Enum
+from dataclasses import dataclass
 from typing import Any, Protocol
+
+from retriever.evidence import EvidenceIntent
 
 
 class OperationInputError(ValueError):
@@ -17,6 +20,15 @@ class ResearchOperation(str, Enum):
     STUDY_QUESTIONS = "study_questions"
 
 
+@dataclass(frozen=True)
+class OperationRequest:
+    """Validated product intent handed to the workflow as structured state."""
+
+    operation: ResearchOperation
+    evidence_intent: EvidenceIntent
+    question: str
+
+
 OPERATION_LABELS: dict[ResearchOperation, str] = {
     ResearchOperation.ASK: "Ask",
     ResearchOperation.SUMMARIZE: "Summarize",
@@ -26,11 +38,27 @@ OPERATION_LABELS: dict[ResearchOperation, str] = {
     ResearchOperation.STUDY_QUESTIONS: "Generate Study Questions",
 }
 
+OPERATION_INTENTS: dict[ResearchOperation, EvidenceIntent] = {
+    ResearchOperation.ASK: EvidenceIntent.QUESTION,
+    ResearchOperation.EXPLAIN_CONCEPT: EvidenceIntent.QUESTION,
+    ResearchOperation.SUMMARIZE: EvidenceIntent.DOCUMENT_SYNTHESIS,
+    ResearchOperation.KEY_POINTS: EvidenceIntent.DOCUMENT_SYNTHESIS,
+    ResearchOperation.STUDY_QUESTIONS: EvidenceIntent.DOCUMENT_SYNTHESIS,
+    ResearchOperation.COMPARE_SOURCES: EvidenceIntent.MULTI_DOCUMENT_COMPARISON,
+}
+
 
 class WorkflowRunner(Protocol):
     """The small backend surface the product layer is permitted to call."""
 
-    def full_pipeline(self, question: str, retriever: Any) -> dict: ...
+    def full_pipeline(
+        self,
+        question: str,
+        retriever: Any,
+        *,
+        evidence_intent: EvidenceIntent = EvidenceIntent.QUESTION,
+        operation: str | None = None,
+    ) -> dict: ...
 
 
 def gradio_operation_choices() -> list[tuple[str, str]]:
@@ -39,7 +67,12 @@ def gradio_operation_choices() -> list[tuple[str, str]]:
 
 
 def build_operation_question(operation_value: str, user_text: str | None) -> str:
-    """Convert a product operation into one ordinary, backend-owned question."""
+    """Compatibility helper returning the normalized question in an operation request."""
+    return build_operation_request(operation_value, user_text).question
+
+
+def build_operation_request(operation_value: str, user_text: str | None) -> OperationRequest:
+    """Validate an operation and preserve its evidence semantics as typed state."""
     try:
         operation = ResearchOperation(operation_value)
     except ValueError as exc:
@@ -49,18 +82,24 @@ def build_operation_question(operation_value: str, user_text: str | None) -> str
     if operation is ResearchOperation.ASK:
         if not focus:
             raise OperationInputError("Enter a question for Ask.")
-        return focus
-    if operation is ResearchOperation.SUMMARIZE:
-        return _with_optional_focus("Summarize the uploaded document(s).", focus)
-    if operation is ResearchOperation.KEY_POINTS:
-        return _with_optional_focus("List the key points from the uploaded document(s).", focus)
-    if operation is ResearchOperation.COMPARE_SOURCES:
-        return _with_optional_focus("Compare the uploaded document sources.", focus)
-    if operation is ResearchOperation.EXPLAIN_CONCEPT:
+        question = focus
+    elif operation is ResearchOperation.SUMMARIZE:
+        question = _with_optional_focus("Summarize the uploaded document(s).", focus)
+    elif operation is ResearchOperation.KEY_POINTS:
+        question = _with_optional_focus("List the key points from the uploaded document(s).", focus)
+    elif operation is ResearchOperation.COMPARE_SOURCES:
+        question = _with_optional_focus("Compare the uploaded document sources.", focus)
+    elif operation is ResearchOperation.EXPLAIN_CONCEPT:
         if not focus:
             raise OperationInputError("Enter a concept to explain.")
-        return f"Explain the concept '{focus}' using the uploaded document(s)."
-    return _with_optional_focus("Generate study questions from the uploaded document(s).", focus)
+        question = f"Explain the concept '{focus}' using the uploaded document(s)."
+    else:
+        question = _with_optional_focus("Generate study questions from the uploaded document(s).", focus)
+    return OperationRequest(
+        operation=operation,
+        evidence_intent=OPERATION_INTENTS[operation],
+        question=question,
+    )
 
 
 def run_operation(
@@ -70,9 +109,12 @@ def run_operation(
     retriever: Any,
 ) -> dict:
     """Dispatch exactly once to the existing verified workflow; do not alter its result."""
+    request = build_operation_request(operation_value, user_text)
     return workflow.full_pipeline(
-        question=build_operation_question(operation_value, user_text),
+        question=request.question,
         retriever=retriever,
+        evidence_intent=request.evidence_intent,
+        operation=request.operation.value,
     )
 
 

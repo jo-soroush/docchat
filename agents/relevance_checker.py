@@ -3,6 +3,7 @@
 import logging
 
 from providers.contracts import ChatProvider
+from retriever.evidence import EvidenceIntent
 
 from .contracts import RelevanceDecision, RelevanceResult
 
@@ -44,3 +45,28 @@ Passages: {document_content}
         result = RelevanceResult.from_model_json(response_text)
         logger.debug("Structured relevance decision: %s", result.decision.value)
         return result
+
+    @staticmethod
+    def check_active_document_evidence(
+        documents, intent: EvidenceIntent
+    ) -> RelevanceResult:
+        """Deterministically assess whether bounded active evidence suits a study task."""
+        if not documents:
+            return RelevanceResult(
+                decision=RelevanceDecision.NO_MATCH,
+                explanation="No active document evidence was available for the requested operation.",
+            )
+        document_ids = {
+            (document.metadata or {}).get("document_id")
+            for document in documents
+            if isinstance((document.metadata or {}).get("document_id"), str)
+        }
+        if intent is EvidenceIntent.MULTI_DOCUMENT_COMPARISON and len(document_ids) < 2:
+            return RelevanceResult(
+                decision=RelevanceDecision.NO_MATCH,
+                explanation="Comparison evidence did not include two active documents.",
+            )
+        return RelevanceResult(
+            decision=RelevanceDecision.CAN_ANSWER,
+            explanation="Bounded active-document evidence satisfies the requested study operation.",
+        )

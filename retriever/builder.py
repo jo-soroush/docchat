@@ -7,6 +7,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
 from config.settings import Settings, settings
 from providers.contracts import EmbeddingProvider
+from .evidence import ActiveDocumentEvidenceRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,17 @@ class RetrieverBuilder:
         
     def build_hybrid_retriever(self, docs):
         """Build the established production hybrid retriever without changing its limits."""
-        return self._build_modes(
-            docs,
+        active_documents = list(docs)
+        modes = self._build_modes(
+            active_documents,
             bm25_k=BM25Retriever.model_fields["k"].default,
             vector_k=self.config.VECTOR_SEARCH_K,
-        ).hybrid
+        )
+        return ActiveDocumentEvidenceRetriever(
+            modes.hybrid,
+            active_documents,
+            self.config.SYNTHESIS_EVIDENCE_MAX_CHUNKS,
+        )
 
     def build_evaluation_modes(self, docs, k: int) -> RetrievalModes:
         """Build fair BM25/vector/hybrid comparators at one explicit evaluation K."""

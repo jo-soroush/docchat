@@ -15,13 +15,18 @@ class OllamaProviderError(ProviderError):
 class OllamaChatProvider(ChatProvider):
     """Adapt LangChain's Ollama chat model to the DocChat chat contract."""
 
-    def __init__(self, *, model: str, base_url: str) -> None:
+    def __init__(self, *, model: str, base_url: str, context_window: int) -> None:
         self._model = ChatOllama(model=model, base_url=base_url)
+        self._context_window = context_window
 
     def generate(self, prompt: str, *, temperature: float, max_tokens: int) -> str:
         try:
             response = self._model.bind(
-                options={"temperature": temperature, "num_predict": max_tokens},
+                options={
+                    "temperature": temperature,
+                    "num_predict": max_tokens,
+                    "num_ctx": self._context_window,
+                },
             ).invoke(prompt)
         except Exception as exc:
             raise OllamaProviderError("Ollama chat request failed.") from exc
@@ -41,7 +46,11 @@ class OllamaChatProvider(ChatProvider):
             response = self._model.bind(
                 format=dict(schema),
                 think=False,
-                options={"temperature": temperature, "num_predict": max_tokens},
+                options={
+                    "temperature": temperature,
+                    "num_predict": max_tokens,
+                    "num_ctx": self._context_window,
+                },
             ).invoke(prompt)
         except Exception as exc:
             raise OllamaProviderError("Ollama structured chat request failed.") from exc
@@ -71,14 +80,27 @@ class OllamaChatProvider(ChatProvider):
 class OllamaEmbeddingProvider(EmbeddingProvider):
     """Adapt LangChain's Ollama embeddings to the DocChat embedding contract."""
 
-    def __init__(self, *, model: str, base_url: str) -> None:
+    def __init__(self, *, model: str, base_url: str, batch_size: int) -> None:
         self._embeddings = OllamaEmbeddings(model=model, base_url=base_url)
+        self._batch_size = batch_size
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        source_texts = list(texts)
+        all_embeddings: list[list[float]] = []
         try:
-            return self._embeddings.embed_documents(list(texts))
+            for start in range(0, len(source_texts), self._batch_size):
+                batch = source_texts[start : start + self._batch_size]
+                embeddings = self._embeddings.embed_documents(batch)
+                if len(embeddings) != len(batch):
+                    raise OllamaProviderError(
+                        "Ollama embedding response did not match the requested batch size."
+                    )
+                all_embeddings.extend(embeddings)
         except Exception as exc:
+            if isinstance(exc, OllamaProviderError):
+                raise
             raise OllamaProviderError("Ollama embedding request failed.") from exc
+        return all_embeddings
 
     def embed_query(self, text: str) -> list[float]:
         try:

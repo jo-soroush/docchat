@@ -68,10 +68,14 @@ boundary is `config/settings.py`.
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama service URL. |
 | `OLLAMA_CHAT_MODEL` | `llama3.2` | Chat model used by relevance, research, and verification. |
 | `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model used by vector retrieval. |
+| `OLLAMA_EMBEDDING_BATCH_SIZE` | `32` | Bounded texts per local embedding request; validated from 1–256. |
+| `OLLAMA_CONTEXT_WINDOW` | `8192` | Local Ollama chat context capacity; validated from 1024–65536. |
+| `DOCUMENT_CHUNK_MAX_CHARACTERS` | `4000` | Parser-side embedding-safe chunk cap; validated from 256–16000. |
 | `GRADIO_SERVER_PORT` | `7860` | Local Gradio port; validated from 1–65535. |
 | `MAX_VERIFICATION_RETRIES` | `2` | Allowed re-research attempts after failed verification; validated from 0–5. |
 | `CHROMA_DB_PATH` | `./chroma_db` | Local persistent vector-store directory. |
 | `CHROMA_COLLECTION_NAME` | `documents` | Explicit vector collection for stable, active-upload-scoped records. |
+| `SYNTHESIS_EVIDENCE_MAX_CHUNKS` | `12` | Bounded active-document evidence for synthesis and comparison operations. |
 
 These values are configuration, not credentials. There is no active IBM,
 Watsonx, or OpenAI runtime configuration in V1.
@@ -84,8 +88,12 @@ Watsonx, or OpenAI runtime configuration in V1.
    - **Summarize**, **Key Points**, **Compare Sources**, or **Generate Study
      Questions**: optionally provide a focus.
    - **Explain Concept**: provide the concept to explain.
-3. Run the operation. The product adapter converts the selection into an ordinary
-   question and delegates to the same verified backend workflow.
+3. Run the operation. The product adapter preserves a typed evidence intent and
+   delegates to the same verified backend workflow. **Ask** and **Explain
+   Concept** use ordinary hybrid question-RAG. **Summarize**, **Key Points**, and
+   **Generate Study Questions** use bounded, evenly spaced active-document
+   evidence. **Compare Sources** uses balanced evidence from at least two active
+   documents and fails safely if fewer than two are uploaded.
 4. Read the answer, verification report, and **Sources & Citations** together.
 
 The session retriever is reused while the uploaded file hash set is unchanged.
