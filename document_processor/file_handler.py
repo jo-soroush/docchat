@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List
 from docling.document_converter import DocumentConverter
-from langchain_text_splitters import MarkdownHeaderTextSplitter
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from config import constants
 from config.settings import settings
 from utils.logging import logger
@@ -15,10 +15,16 @@ class DocumentProcessingError(ValueError):
     """Safe document-ingestion failure suitable for UI presentation."""
 
 class DocumentProcessor:
-    def __init__(self):
+    def __init__(self, config=settings):
         self.headers = [("#", "Header 1"), ("##", "Header 2")]
-        self.cache_dir = Path(settings.CACHE_DIR)
+        self.config = config
+        self.cache_dir = Path(self.config.CACHE_DIR)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._subchunk_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.config.DOCUMENT_CHUNK_MAX_CHARACTERS,
+            chunk_overlap=0,
+            length_function=len,
+        )
         
     def validate_files(self, files: List) -> None:
         """Validate the total size of the uploaded files."""
@@ -53,6 +59,10 @@ class DocumentProcessor:
                     try:
                         logger.info(f"Loading from cache: {file.name}")
                         chunks = self._load_from_cache(cache_path)
+                        chunks, migrated = self._bound_chunk_size(chunks)
+                        if migrated:
+                            logger.info("Migrating cached document chunks to the bounded representation.")
+                            self._save_to_cache(chunks, cache_path)
                     except (OSError, pickle.UnpicklingError, KeyError, TypeError):
                         logger.warning("Invalid document cache; rebuilding from source.")
                         cache_path.unlink(missing_ok=True)
@@ -98,7 +108,31 @@ class DocumentProcessor:
                 "Document content could not be extracted."
             ) from exc
         splitter = MarkdownHeaderTextSplitter(self.headers)
-        return splitter.split_text(markdown)
+        chunks, _ = self._bound_chunk_size(splitter.split_text(markdown))
+        return chunks
+
+    def _bound_chunk_size(self, chunks: List) -> tuple[List, bool]:
+        """Split only oversized header chunks before they reach embeddings.
+
+        Header metadata stays with every derived chunk. Provenance is attached
+        afterwards, so each deterministic derived position receives its own
+        stable C05 chunk identity on fresh and cached processing alike.
+        """
+        bounded_chunks = []
+        migrated = False
+        for chunk in chunks:
+            if len(chunk.page_content) <= self.config.DOCUMENT_CHUNK_MAX_CHARACTERS:
+                bounded_chunks.append(chunk)
+                continue
+            derived_chunks = self._subchunk_splitter.split_documents([chunk])
+            if not derived_chunks or any(
+                len(derived.page_content) > self.config.DOCUMENT_CHUNK_MAX_CHARACTERS
+                for derived in derived_chunks
+            ):
+                raise DocumentProcessingError("Document content could not be bounded safely.")
+            bounded_chunks.extend(derived_chunks)
+            migrated = True
+        return bounded_chunks, migrated
 
     @staticmethod
     def _attach_provenance(chunks: List, document_id: str, source_name: str) -> None:

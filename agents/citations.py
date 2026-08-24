@@ -4,7 +4,7 @@ from pathlib import Path
 
 from langchain.schema import Document
 
-from .contracts import ClaimSource, SourceCitation
+from .contracts import ClaimSource, ComparisonGrounding, SourceCitation
 
 
 def build_citation_context(documents: list[Document]) -> str:
@@ -60,6 +60,35 @@ def resolve_claim_sources(
                 )
             )
     return citations
+
+
+def evaluate_comparison_grounding(
+    citations: list[SourceCitation], documents: list[Document]
+) -> ComparisonGrounding:
+    """Measure whether this current comparison draft maps evidence from every source.
+
+    Only citations that the existing resolver marked available receive coverage
+    credit. Unknown or unselected model-supplied chunk IDs therefore cannot
+    make an incomplete comparison appear grounded.
+    """
+    active_source_ids = _ordered_active_document_ids(documents)
+    grounded_source_ids = [
+        document_id
+        for document_id in active_source_ids
+        if any(
+            citation.available and citation.document_id == document_id
+            for citation in citations
+        )
+    ]
+    return ComparisonGrounding(
+        active_source_ids=active_source_ids,
+        grounded_source_ids=grounded_source_ids,
+        missing_source_ids=[
+            document_id
+            for document_id in active_source_ids
+            if document_id not in grounded_source_ids
+        ],
+    )
 
 
 def format_citation_report(citations: list[SourceCitation]) -> str:
@@ -127,3 +156,13 @@ def _section(metadata: dict) -> str | None:
 def _string_metadata(metadata: dict, key: str) -> str | None:
     value = metadata.get(key)
     return value if isinstance(value, str) and value else None
+
+
+def _ordered_active_document_ids(documents: list[Document]) -> list[str]:
+    """Return deterministic active source identities without inspecting content."""
+    document_ids: list[str] = []
+    for document in documents:
+        document_id = _string_metadata(document.metadata or {}, "document_id")
+        if document_id and document_id not in document_ids:
+            document_ids.append(document_id)
+    return document_ids

@@ -54,7 +54,7 @@ def verification_json() -> str:
 
 
 class VerificationOutputTests(TestCase):
-    def test_verification_uses_a_bounded_300_token_structured_request(self) -> None:
+    def test_verification_uses_a_bounded_400_token_structured_request(self) -> None:
         provider = RecordingStructuredProvider([verification_json()])
         result = VerificationAgent(provider).check(
             "What is the grounded answer?",
@@ -65,7 +65,7 @@ class VerificationOutputTests(TestCase):
         self.assertTrue(result.supported)
         self.assertEqual(provider.calls[0]["schema"], VerificationResult.model_json_schema())
         self.assertEqual(provider.calls[0]["temperature"], 0.0)
-        self.assertEqual(provider.calls[0]["max_tokens"], 300)
+        self.assertEqual(provider.calls[0]["max_tokens"], 400)
 
     def test_complete_verification_json_validates_normally(self) -> None:
         result = VerificationResult.from_model_json(verification_json())
@@ -90,7 +90,9 @@ class VerificationOutputTests(TestCase):
             content=raw_truncated_content,
             response_metadata={"done_reason": "length"},
         )
-        provider = OllamaChatProvider(model="chat-test", base_url="http://ollama.test:11434")
+        provider = OllamaChatProvider(
+            model="chat-test", base_url="http://ollama.test:11434", context_window=8192
+        )
 
         with self.assertRaisesRegex(
             OllamaProviderError, "exceeded its generation limit"
@@ -101,7 +103,7 @@ class VerificationOutputTests(TestCase):
 
         self.assertNotIn(raw_truncated_content, str(error.exception))
 
-    def test_relevance_and_research_budgets_remain_unchanged(self) -> None:
+    def test_relevance_and_research_budgets_remain_bounded(self) -> None:
         documents = [
             Document(
                 page_content="Grounding evidence.",
@@ -124,6 +126,6 @@ class VerificationOutputTests(TestCase):
             [(call["schema"], call["max_tokens"]) for call in provider.calls],
             [
                 (RelevanceResult.model_json_schema(), 100),
-                (ResearchResult.model_json_schema(), 300),
+                (ResearchResult.model_json_schema(), 1500),
             ],
         )
