@@ -1921,12 +1921,16 @@ combination routes only to `VERIFIED`.
 
 #### Final Owner Manual Product Validation
 
-The project owner manually validated five V1-C10 product operations against
-the current local runtime: **Ask**, **Summarize**, **Key Points**, **Generate
-Study Questions**, and **Compare Sources**. The final
-manual Compare Sources validation used `qwen3.5:9b` and produced Supported YES,
-Relevant YES, citations from both active documents, no unsupported claims, and
-no contradictions. This owner-observed evidence supplements—not replaces—the
+The project owner manually validated all six V1-C10 product operations against
+the current local runtime: **Ask**, **Summarize**, **Key Points**, **Explain
+Concept**, **Generate Study Questions**, and **Compare Sources**. The Explain
+Concept validation used `MachineLearning_ir - Agentic AI.pdf` with the question
+“Explain the concept of agentic AI.” It produced an answer grounded in the
+uploaded document, Supported YES, Relevant YES, no unsupported claims or
+contradictions, and a resolved citation to that PDF. The final manual Compare
+Sources validation used `qwen3.5:9b` and produced Supported YES, Relevant YES,
+citations from both active documents, no unsupported claims, and no
+contradictions. This owner-observed evidence supplements—not replaces—the
 deterministic and repeatable local Gradio validations above.
 
 **Professional lesson:** targeted revision reduces unnecessary regeneration,

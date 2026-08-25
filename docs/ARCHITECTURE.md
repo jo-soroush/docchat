@@ -61,13 +61,15 @@ small fixture proves hybrid superiority.
 
 For `QUESTION`, the evidence wrapper delegates to this unchanged hybrid query
 path. For `DOCUMENT_SYNTHESIS`, it selects at most
-`SYNTHESIS_EVIDENCE_MAX_CHUNKS` evenly spaced chunks from active source
-documents within one total bounded budget. For `MULTI_DOCUMENT_COMPARISON`, it
-requires at least two active `document_id` values and samples each participating
-source under the same budget, so one source cannot silently dominate. These
-paths preserve the same C05 chunk metadata used by deterministic citation
-resolution; they do not query inactive persisted documents or feed an
-unrestricted corpus to the model.
+`SYNTHESIS_EVIDENCE_MAX_CHUNKS` using deterministic section-aware coverage:
+it chooses ordered section representatives, preserves early structural coverage,
+and spreads any remaining capacity across later sections. When fewer than two
+meaningful section labels exist, it uses a deterministic evenly spaced fallback.
+For `MULTI_DOCUMENT_COMPARISON`, it requires at least two active `document_id`
+values and samples each participating source under the same bounded budget, so
+one source cannot silently dominate. These paths preserve the same C05 chunk
+metadata used by deterministic citation resolution; they do not query inactive
+persisted documents or feed an unrestricted corpus to the model.
 
 ### Provider boundary
 

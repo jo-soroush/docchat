@@ -1,125 +1,320 @@
-# DocChat
+# DocChat V1
 
-DocChat is a local-first, source-grounded personal research assistant for uploaded
-PDF, DOCX, TXT, and Markdown documents. V1 preserves useful IBM Skills Network
-DocChat capabilities and provenance while running independently through a
-vendor-neutral provider boundary with Ollama as the first local implementation.
+**A local-first, multi-document, evidence-grounded AI research assistant with hybrid retrieval, citations, verification, and bounded correction.**
 
-## What V1 provides
+DocChat helps users research their own PDF, DOCX, TXT, and Markdown documents locally.
 
-- Docling-based document conversion, Markdown-aware chunking, hashing, caching,
-  and duplicate-chunk removal.
-- Chroma vector retrieval plus BM25 keyword retrieval combined as hybrid RAG.
-- Typed relevance, research, and verification contracts in a bounded LangGraph
-  workflow.
-- Stable document/chunk provenance and user-visible sources and citations.
-- Safe per-run traces and explicit, non-fabricating failure outcomes.
-- Gradio study operations: Ask, Summarize, Key Points, Compare Sources, Explain
-  Concept, and Generate Study Questions.
-- Deterministic retrieval, answer/verification, workflow, citation, trace, and
-  failure regression suites.
+V1 started from the IBM Skills Network DocChat baseline and evolved it into a vendor-neutral, Ollama-based research system with stronger document provenance, multi-document reasoning, evidence grounding, structured verification, safe failure handling, and reproducible evaluation.
 
-## Quick start
+The goal of V1 was not simply to make a chatbot answer questions about documents. It was to build a research workflow where answers can be traced to active source material, checked before presentation, and rejected safely when sufficient support is unavailable.
 
-This V1 path was verified on macOS with Python 3.11.15. It uses an isolated
-repository virtual environment and does not require an IBM account, IBM project,
-or API key.
+---
+
+## Why I Built This
+
+A basic RAG pipeline can retrieve relevant text and send it to a language model. That alone does not guarantee that citations support claims, multiple uploaded documents remain isolated, comparisons use every required source, large documents embed reliably, or retries improve failed answers.
+
+V1 focuses on those reliability boundaries.
+
+---
+
+## What V1 Can Do
+
+- **Ask** — answer questions using hybrid retrieval.
+- **Summarize** — create grounded document synthesis.
+- **Key Points** — extract important ideas from active documents.
+- **Compare Sources** — compare multiple documents using evidence from each source.
+- **Explain Concept** — explain a concept using retrieved document evidence.
+- **Generate Study Questions** — generate grounded study material.
+
+Supported formats: PDF, DOCX, TXT, and Markdown.
+
+---
+
+## Core Architecture
+
+```text
+Gradio UI
+  → Product Adapter / typed EvidenceIntent
+  → Docling / Markdown-aware chunking / bounded subchunking / cache / provenance
+  → BM25 + Chroma vector retrieval
+  → task-aware evidence selection
+  → typed ResearchResult
+  → citation resolution / multi-source grounding
+  → typed VerificationResult
+  → bounded correction + targeted draft revision
+  → VERIFIED or explicit safe failure
+
+DocChat Core
+  → ChatProvider + EmbeddingProvider
+  → Ollama adapters
+```
+
+The application layer remains vendor-neutral; Ollama-specific behavior stays at the provider boundary.
+
+---
+
+## Evidence-Grounded Research
+
+### Questions
+
+**Ask** and **Explain Concept** use ordinary hybrid RAG, combining lexical and semantic retrieval.
+
+### Document Synthesis
+
+**Summarize**, **Key Points**, and **Generate Study Questions** use deterministic, bounded active-document evidence. For large structured documents, V1 uses section-aware coverage with a deterministic fallback when useful section metadata is unavailable.
+
+### Multi-Document Comparison
+
+**Compare Sources** balances evidence across active documents and requires valid claim-to-evidence mappings from every required source. Merely retrieving both documents is not enough to mark a comparison as grounded.
+
+Comparison evidence is bounded by `SYNTHESIS_EVIDENCE_MAX_CHUNKS` (default: 12).
+Within that fixed capacity, the selector samples participating sources so one source
+cannot silently dominate. It does not promise representative evidence for an
+arbitrary number of active documents beyond that bounded capacity.
+
+---
+
+## Hybrid Retrieval
+
+DocChat combines:
+
+- **BM25** for exact words, phrases, names, and lexical matches.
+- **Chroma vector retrieval** for semantic similarity.
+
+This hybrid layer supports question-oriented retrieval without relying exclusively on one retrieval method.
+
+---
+
+## Source Provenance and Citations
+
+Each active document and chunk carries stable provenance:
+
+```text
+document → document_id → chunk → chunk_id → research claim → resolved citation
+```
+
+Citation resolution validates requested chunk IDs against evidence actually supplied to the workflow. Unknown or unavailable IDs do not silently become valid citations.
+
+For comparisons, the workflow additionally checks that every required active source is represented by grounded mappings.
+
+---
+
+## Verification Before Presentation
+
+Research output is not automatically trusted.
+
+A separate Verification Agent returns a strict typed result describing whether the answer is supported, relevant, contradictory, or requires correction.
+
+Supported and unsupported states are structurally separated, preventing contradictory control states from being accepted.
+
+Only `supported=true` and `relevant=true` can route to `VERIFIED`.
+
+---
+
+## Bounded Correction and Retry
+
+Verification failures do not create an unlimited autonomous loop.
+
+```text
+Research
+  → Verification
+  → typed correction feedback
+  → targeted revision of the previous draft
+  → Verification
+```
+
+The retry receives only the immediately relevant correction state. The Research
+Agent is instructed to preserve supported content, revise or remove problematic
+claims, avoid new factual details, and stay inside the supplied evidence. Its
+revised output is independently validated through citation grounding and
+verification; verification remains authoritative after every revision.
+
+---
+
+## Engineering Challenges Solved in V1
+
+### Oversized document chunks
+
+Real PDFs produced very large Markdown sections that exceeded practical embedding limits.
+
+**Solution:** deterministic embedding-safe subchunking while preserving section/source provenance.
+
+### Large embedding requests
+
+Embedding thousands of chunks in one request could fail.
+
+**Solution:** provider-owned ordered embedding batching with configurable batch size, stable ordering, partial-batch support, vector-count validation, and safe failure behavior.
+
+### Effective context-window exhaustion
+
+Better section-aware evidence coverage increased prompt size.
+
+**Solution:** validated, configurable Ollama context capacity forwarded through the provider boundary.
+
+### Multi-document grounding
+
+Retrieving two documents did not prove the generated comparison actually used both.
+
+**Solution:** require valid resolved evidence mappings from every active comparison source.
+
+### Unsupported compound claims
+
+A valid citation can still support only part of a broad model claim.
+
+**Solution:** atomic comparison-claim instructions, strict evidence mapping, and independent verification.
+
+### Unguided retries
+
+Full regeneration after verification failure could introduce new unsupported claims.
+
+**Solution:** pass typed verifier correction feedback only to the next bounded research attempt.
+
+### Expensive full regeneration
+
+Recreating an entire answer could discard already-supported content.
+
+**Solution:** targeted revision of the immediately previous draft.
+
+### Structured verification truncation
+
+Real comparison verification exposed a generation-capacity boundary.
+
+**Solution:** measure the failure at the provider boundary, calibrate the verifier, and increase its bounded output budget from 300 to **400 tokens**. Partial/truncated verification results remain rejected.
+
+---
+
+## Safe Failure Is a Feature
+
+DocChat never represents unverified output as `VERIFIED`. A
+`RETRY_EXHAUSTED` outcome may preserve and display the latest draft together with
+an explicit non-success verification report, rather than presenting that draft
+as trusted.
+
+Controlled failures include insufficient comparison sources, invalid evidence mappings, malformed structured output, provider failure, output truncation, unsupported claims, and exhausted bounded retries.
+
+---
+
+## V1 Validation
+
+### Deterministic suite
+
+**145 / 145 tests passed**
+
+Coverage includes product operations, evidence semantics, active-document scoping, retrieval, citations, comparison grounding, embedding-safe chunking, provider boundaries, verification semantics, correction-guided retries, targeted draft revision, routing, traces, and safe failure behavior.
+
+### Retrieval evaluation
+
+**C06: PASS**
+
+### Answer and verification evaluation
+
+**C07: 10 / 10 PASS**
+
+### Real local validation
+
+V1 was exercised through the Gradio application with real uploaded documents.
+
+Validated operations:
+
+- Ask
+- Summarize
+- Key Points
+- Explain Concept
+- Generate Study Questions
+- Compare Sources
+
+Repeated two-document comparison validation produced citations from both documents, `Supported: YES`, `Relevant: YES`, no unsupported claims, no contradictions, and no provider/output truncation failure.
+
+These results demonstrate the tested V1 behavior; they are not a claim of universal model accuracy.
+
+---
+
+## Local-First Provider Architecture
+
+V1 runs without an active IBM, Watsonx, or OpenAI runtime dependency.
+
+```text
+Agents / Retrieval
+  → ChatProvider + EmbeddingProvider
+  → Ollama implementation
+```
+
+The repository does not contain model weights.
+
+---
+
+## Quick Start
+
+V1 was verified on macOS with Python 3.11.15.
 
 ```bash
 git clone <your-fork-or-clone-url>
 cd docchat
+
 python3.11 -m venv venv
-venv/bin/python -m pip install --upgrade pip
-venv/bin/python -m pip install -r requirements.txt
+source venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Install and run [Ollama](https://ollama.com/) locally, then inspect the models
-available on your machine:
+Install/start Ollama separately and inspect available models:
 
 ```bash
 ollama --version
 ollama list
 ```
 
-The `.env.example` defaults expect `llama3.2` for chat and `nomic-embed-text`
-for embeddings at `http://127.0.0.1:11434`. Configure `OLLAMA_CHAT_MODEL` and
-`OLLAMA_EMBEDDING_MODEL` in your untracked `.env` to model names already
-available locally. If the default models are absent, obtain them through Ollama
-according to your own download policy; model weights are never committed here.
+Example configuration used for final local V1 validation:
 
-Start the application:
+```env
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_CHAT_MODEL=qwen3.5:9b
+OLLAMA_EMBEDDING_MODEL=qwen3-embedding:0.6b
+OLLAMA_EMBEDDING_BATCH_SIZE=32
+OLLAMA_CONTEXT_WINDOW=8192
+DOCUMENT_CHUNK_MAX_CHARACTERS=4000
+GRADIO_SERVER_PORT=7860
+MAX_VERIFICATION_RETRIES=2
+CHROMA_DB_PATH=./chroma_db
+CHROMA_COLLECTION_NAME=documents
+SYNTHESIS_EVIDENCE_MAX_CHUNKS=12
+```
+
+This records the calibrated validation configuration; repository defaults may differ. Use model names available in your local Ollama installation.
+
+Start DocChat:
 
 ```bash
-venv/bin/python app.py
+python app.py
 ```
 
-Open the local URL shown by Gradio (default `http://127.0.0.1:7860`). If that
-port is in use, set `GRADIO_SERVER_PORT` in `.env` to another local port. The
-application binds to `127.0.0.1`.
+Open the local Gradio URL, normally `http://127.0.0.1:7860`.
 
-## Configure locally
+---
 
-Copy `.env.example` to `.env`; never commit `.env`. The active configuration
-boundary is `config/settings.py`.
+## Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama service URL. |
-| `OLLAMA_CHAT_MODEL` | `llama3.2` | Chat model used by relevance, research, and verification. |
-| `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model used by vector retrieval. |
-| `OLLAMA_EMBEDDING_BATCH_SIZE` | `32` | Bounded texts per local embedding request; validated from 1–256. |
-| `OLLAMA_CONTEXT_WINDOW` | `8192` | Local Ollama chat context capacity; validated from 1024–65536. |
-| `DOCUMENT_CHUNK_MAX_CHARACTERS` | `4000` | Parser-side embedding-safe chunk cap; validated from 256–16000. |
-| `GRADIO_SERVER_PORT` | `7860` | Local Gradio port; validated from 1–65535. |
-| `MAX_VERIFICATION_RETRIES` | `2` | Allowed re-research attempts after failed verification; validated from 0–5. |
-| `CHROMA_DB_PATH` | `./chroma_db` | Local persistent vector-store directory. |
-| `CHROMA_COLLECTION_NAME` | `documents` | Explicit vector collection for stable, active-upload-scoped records. |
-| `SYNTHESIS_EVIDENCE_MAX_CHUNKS` | `12` | Bounded active-document evidence for synthesis and comparison operations. |
+| Variable | Purpose |
+|---|---|
+| `OLLAMA_BASE_URL` | Local Ollama service |
+| `OLLAMA_CHAT_MODEL` | Chat model used by agents |
+| `OLLAMA_EMBEDDING_MODEL` | Embedding model used by vector retrieval |
+| `OLLAMA_EMBEDDING_BATCH_SIZE` | Bounded texts per embedding request |
+| `OLLAMA_CONTEXT_WINDOW` | Ollama chat context capacity |
+| `DOCUMENT_CHUNK_MAX_CHARACTERS` | Embedding-safe document chunk limit |
+| `GRADIO_SERVER_PORT` | Local Gradio port |
+| `MAX_VERIFICATION_RETRIES` | Maximum bounded re-research attempts |
+| `CHROMA_DB_PATH` | Persistent local vector-store path |
+| `CHROMA_COLLECTION_NAME` | Chroma collection |
+| `SYNTHESIS_EVIDENCE_MAX_CHUNKS` | Bounded synthesis/comparison evidence capacity |
 
-These values are configuration, not credentials. There is no active IBM,
-Watsonx, or OpenAI runtime configuration in V1.
+Copy `.env.example` to `.env`. Never commit `.env`.
 
-## Use DocChat
+---
 
-1. Upload one or more `.pdf`, `.docx`, `.txt`, or `.md` files.
-2. Select a **Research Operation**:
-   - **Ask**: enter a document question.
-   - **Summarize**, **Key Points**, **Compare Sources**, or **Generate Study
-     Questions**: optionally provide a focus.
-   - **Explain Concept**: provide the concept to explain.
-3. Run the operation. The product adapter preserves a typed evidence intent and
-   delegates to the same verified backend workflow. **Ask** and **Explain
-   Concept** use ordinary hybrid question-RAG. **Summarize**, **Key Points**, and
-   **Generate Study Questions** use bounded, evenly spaced active-document
-   evidence. **Compare Sources** uses balanced evidence from at least two active
-   documents and fails safely if fewer than two are uploaded.
-4. Read the answer, verification report, and **Sources & Citations** together.
-
-The session retriever is reused while the uploaded file hash set is unchanged.
-Changing uploads rebuilds the document/retrieval path.
-
-## Architecture at a glance
-
-```text
-Gradio product adapter
-  → document validation / Docling / Markdown chunks / cache / provenance
-  → BM25 + Chroma vector search → hybrid retriever
-  → typed relevance → typed research → typed verification
-  → bounded correction route → terminal outcome
-  → answer + verification report + citations + safe run trace
-
-DocChat Core → ChatProvider / EmbeddingProvider → Ollama local runtime
-```
-
-See [architecture documentation](docs/ARCHITECTURE.md) for ownership, contracts,
-data flow, and failure behavior. See [provenance and decisions](docs/PROVENANCE_AND_DECISIONS.md)
-for the historical IBM baseline and V1 extensions.
-
-## Reproduce V1 checks
-
-Run these from the repository root after installing dependencies. The deterministic
-suite uses fakes where appropriate and does not require a model download.
+## Reproduce the V1 Checks
 
 ```bash
 venv/bin/python -m unittest discover -s test -v
@@ -129,29 +324,93 @@ venv/bin/python -m pip check
 venv/bin/python -m compileall -q agents app.py config document_processor evaluation product providers retriever test utils
 ```
 
-The retrieval runner measures BM25, vector, and hybrid retrieval at a common
-K=3. The answer/verification runner measures retrieval preconditions, answer
-behavior, citation grounding, typed verification, and routing separately. See
-[verified demos and results](docs/VERIFIED_DEMOS.md) for actual V1 evidence and
-the boundaries of what was tested.
+See:
 
-## Limitations and V2 boundary
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/VERIFIED_DEMOS.md`](docs/VERIFIED_DEMOS.md)
+- [`docs/PROVENANCE_AND_DECISIONS.md`](docs/PROVENANCE_AND_DECISIONS.md)
 
-V1 is a local single-user research assistant, not a production deployment. Its
-small deterministic fixtures do not prove broad real-model quality; no cloud
-provider, multi-provider failover, persistent research library, telemetry
-backend, authentication, or multi-user isolation is implemented. A model must
-also follow the required structured JSON contracts for real workflow calls.
+---
 
-V2 begins only after V1 closure and will add explicitly approved source routing,
-tooling, security, persistent collections, and deployment boundaries. It does
-not exist in the active V1 runtime.
+## Technology Stack
 
-## Provenance
+Python 3.11 · LangGraph · LangChain · Ollama · Docling · Chroma · BM25 · Pydantic · Gradio
 
-IBM Skills Network DocChat history is preserved as provenance. The selected
-historical baseline is IBM remote `origin/2-final` commit `eb9be30`; V1 removes
-its active IBM runtime dependency but does not erase that history. No `LICENSE*`
-file was present in the audited baseline or active repository, so do not infer a
-license from this documentation. See the provenance record before redistributing
-or relicensing the project.
+Qwen is a model family used in the final local validation configuration, not a
+required repository dependency or the default configured model.
+
+---
+
+## What I Learned From V1
+
+The central lesson was that reliable document AI is not primarily about connecting a larger model to a vector database.
+
+Reliability depends on the boundaries around the model: what evidence enters context, how documents retain identity, how claims map to evidence, how multiple sources remain represented, how structured output is validated, how generation budgets are measured, how failures are exposed, and how retries are constrained.
+
+Real-document failures occurred even when individual components appeared correct in isolation.
+
+That shifted the engineering question from:
+
+> “Can the model produce an answer?”
+
+to:
+
+> **“Can the system demonstrate why this answer should be trusted?”**
+
+That became the central design principle of DocChat V1.
+
+---
+
+## Current Limitations
+
+V1 is a local, single-user research system, not a production SaaS deployment.
+
+Current boundaries:
+
+- Ollama is the implemented local provider.
+- Real-model quality depends on the selected model.
+- No authentication or multi-user isolation.
+- No cloud-provider failover.
+- No production telemetry backend.
+- No persistent research-library experience yet.
+- Persistent Chroma representation migration/cleanup remains future work.
+- Real-document validation covers selected workflows/documents rather than universal model behavior.
+
+---
+
+## V2 Direction
+
+V2 starts from the closed and validated V1 baseline.
+
+Potential future work may include persistent research libraries, richer source routing, additional tools, provider expansion, security/deployment boundaries, improved observability, broader evaluation, and production-oriented infrastructure.
+
+These are roadmap items, not current V1 capabilities.
+
+---
+
+## Project Provenance
+
+DocChat V1 builds on the historical **IBM Skills Network DocChat** project.
+
+Selected historical baseline:
+
+```text
+IBM remote: origin/2-final
+Commit: eb9be30
+```
+
+V1 preserves that provenance while removing the active IBM runtime dependency and extending the project with the architecture, reliability controls, product semantics, evaluation, and local-provider work documented in this repository.
+
+See [`docs/PROVENANCE_AND_DECISIONS.md`](docs/PROVENANCE_AND_DECISIONS.md) for the detailed distinction between the historical baseline and subsequent V1 engineering work.
+
+No `LICENSE*` file was present in the audited baseline or active repository. Do not infer redistribution or relicensing rights from this README.
+
+---
+
+## Status
+
+**DocChat V1: CLOSED ✅**
+
+V1 reached its defined quality gate after deterministic regression testing, evaluation runners, and real local document validation.
+
+The next development phase is intentionally separated as V2.
