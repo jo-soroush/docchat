@@ -5,3 +5,6 @@ chroma_db/
 venv/
 app.log
 .DS_Store
+
+# Transient local Gradio session marker; never application data.
+:memory:.ses
